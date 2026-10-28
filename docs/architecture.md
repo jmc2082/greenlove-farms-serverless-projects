@@ -62,7 +62,8 @@ greenlove-farms-serverless-projects/
   domain-infra/     deployed ONCE (not per env): SES greenlove-farms.com identity + DKIM/MAIL FROM/DMARC
                     records, ACM certs + API custom domains (api., api-dev.) — all in the existing Route 53 zone
   shared-infra/     Lambda layer (mongo, responses, jwt, money, dates), API domain, SSM params
-  auth/             Cognito pool, groups, post-confirmation (links guest orders by email)
+  auth/             Cognito pool (emails via SES), groups, post-confirmation links the guest customer record
+                    by verified email; /signup never writes to Mongo
   catalog/          products, variants, fulfillment profiles, inventory, Square catalog import
   images/           Cloudinary signing + image refs
   carts/            server-side carts, product views, watchlist
@@ -163,7 +164,7 @@ Short-lived reservation of inventory (Phase 2: juice slot / crop capacity) betwe
 | carts | `POST /carts`, `GET/PUT /carts/{id}`, `POST /carts/{id}/items`, `POST /views`, `POST /watchlist` | Customer: `POST /carts/{id}/merge` |
 | checkout | `POST /checkout/quote`, `POST /checkout/pay`, `POST /checkout/webhooks/square` | — |
 | orders | `GET /orders/lookup?token=` | Customer: `GET /me/orders`; Admin: list/filter by delivery day, update fulfillment-group status, refund |
-| auth | signup/login/refresh/forgot (as EventRobin) | `GET/PUT /me` |
+| auth | `POST /signup`, `/confirm-signup`, `/resend-code`, `/login`, `/refresh`, `/forgot-password`, `/confirm-password` | Customer: `GET/PUT /me`; Admin: `POST /admin/users/role` |
 | notifications | — | internal only (invoked by other stacks / scheduler) |
 
 ## 8. Frontend integration (greenlove-farms-nuxtjs)

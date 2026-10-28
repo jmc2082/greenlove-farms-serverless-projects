@@ -3,3 +3,4 @@ export * from './ssm-client';
 export * from './response-utils';
 export * from './jwt-verify';
 export * from './types/catalog';
+export * from './types/customer';

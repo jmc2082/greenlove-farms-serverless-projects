@@ -1,0 +1,60 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "greenlove-auth"
+region     = "us-east-2"
+profile    = "jm_ubuntu_thinkpad_user"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[default.build.parameters]
+cached   = true
+parallel = true
+
+[default.deploy.parameters]
+resolve_s3 = true
+parameter_overrides = "Environment=\"dev\" MongoDbName=\"greenlove_dev\" SharedLayerArn=\"/greenlove/dev/shared-layer-arn\" ApiDomainName=\"/greenlove/dev/api-domain-name\" ReplyTo=\"/greenlove/dev/ses/reply-to\" TransactionalConfigSet=\"/greenlove/dev/ses/transactional-config-set\" AllowedOrigins=\"http://localhost:3000\""
+s3_prefix = "greenlove-auth"
+image_repositories = []
+
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+env_vars = "env.json"
+
+[dev.global.parameters]
+stack_name = "greenlove-auth"
+region     = "us-east-2"
+profile    = "jm_ubuntu_thinkpad_user"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[dev.build.parameters]
+cached   = true
+parallel = true
+
+[dev.deploy.parameters]
+resolve_s3 = true
+parameter_overrides = "Environment=\"dev\" MongoDbName=\"greenlove_dev\" SharedLayerArn=\"/greenlove/dev/shared-layer-arn\" ApiDomainName=\"/greenlove/dev/api-domain-name\" ReplyTo=\"/greenlove/dev/ses/reply-to\" TransactionalConfigSet=\"/greenlove/dev/ses/transactional-config-set\" AllowedOrigins=\"http://localhost:3000\""
+s3_prefix = "greenlove-auth"
+image_repositories = []
+
+[dev.local_start_api.parameters]
+warm_containers = "EAGER"
+env_vars = "env.json"
+
+[prod.global.parameters]
+stack_name = "greenlove-auth-prod"
+region     = "us-east-2"
+profile    = "jm_ubuntu_thinkpad_user"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[prod.build.parameters]
+cached   = true
+parallel = true
+
+[prod.deploy.parameters]
+resolve_s3 = true
+parameter_overrides = "Environment=\"prod\" MongoDbName=\"greenlove_prod\" SharedLayerArn=\"/greenlove/prod/shared-layer-arn\" ApiDomainName=\"/greenlove/prod/api-domain-name\" ReplyTo=\"/greenlove/prod/ses/reply-to\" TransactionalConfigSet=\"/greenlove/prod/ses/transactional-config-set\" AllowedOrigins=\"https://greenlove-farms.com,https://www.greenlove-farms.com\""
+s3_prefix = "greenlove-auth-prod"
+image_repositories = []

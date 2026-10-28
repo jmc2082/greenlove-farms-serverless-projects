@@ -1,0 +1,543 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Auth Stack (Cognito + customer accounts)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  MongoDbName:
+    Type: String
+    Default: greenlove_dev
+  SharedLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/shared-layer-arn
+  ApiDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/api-domain-name
+  ReplyTo:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/reply-to
+  TransactionalConfigSet:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/transactional-config-set
+  EmailDomain:
+    Type: String
+    Default: greenlove-farms.com
+    Description: SES domain identity (created by domain-infra) that Cognito sends from
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    MemorySize: 256
+    Timeout: 15
+    Architectures:
+      - arm64
+    Layers:
+      - !Ref SharedLayerArn
+    Environment:
+      Variables:
+        MONGODB_URI_PARAM: !Sub "/greenlove/${Environment}/mongodb-uri"
+        MONGODB_DB_NAME: !Ref MongoDbName
+        ENVIRONMENT: !Ref Environment
+        SERVICE_VERSION: "0.1.0"
+
+Resources:
+
+  # ── Cognito User Pool ─────────────────────────────────────────────────────────
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "greenlove-user-pool-${Environment}"
+      DeletionProtection: !If [IsProd, ACTIVE, INACTIVE]
+      UsernameAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      EmailConfiguration:
+        EmailSendingAccount: DEVELOPER
+        SourceArn: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+        From: !Sub "GreenLove Farms <no-reply@${EmailDomain}>"
+        ReplyToEmailAddress: !Ref ReplyTo
+        ConfigurationSet: !Ref TransactionalConfigSet
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: Your GreenLove Farms verification code
+        EmailMessage: "Welcome to GreenLove Farms! Your verification code is {####}"
+      LambdaConfig:
+        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub "greenlove-web-client-${Environment}"
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Admins
+      Description: Full platform access, including user roles
+      UserPoolId: !Ref UserPool
+      Precedence: 0
+
+  StaffGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Staff
+      Description: Farm staff — catalog, orders and fulfillment admin
+      UserPoolId: !Ref UserPool
+      Precedence: 10
+
+  CustomersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Customers
+      Description: Default group for every confirmed account
+      UserPoolId: !Ref UserPool
+      Precedence: 100
+
+  PostConfirmationLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt PostConfirmationFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # ── SSM Outputs ───────────────────────────────────────────────────────────────
+  UserPoolIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/cognito/user-pool-id"
+      Type: String
+      Value: !Ref UserPool
+
+  UserPoolArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/cognito/user-pool-arn"
+      Type: String
+      Value: !GetAtt UserPool.Arn
+
+  ClientIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/cognito/client-id"
+      Type: String
+      Value: !Ref UserPoolClient
+
+  # ── HTTP API ──────────────────────────────────────────────────────────────────
+  AuthApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: GreenLove Auth + Customer Account API
+      Auth:
+        DefaultAuthorizer: CognitoJWT
+        Authorizers:
+          CognitoJWT:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+              audience:
+                - !Ref UserPoolClient
+            IdentitySource: "$request.header.Authorization"
+      CorsConfiguration:
+        AllowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        AllowHeaders: ["Content-Type", "Authorization"]
+        AllowOrigins: !Ref AllowedOrigins
+        MaxAge: 600
+
+  # Served at https://<ApiDomainName>/auth/...
+  AuthApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref ApiDomainName
+      ApiId: !Ref AuthApi
+      Stage: !Ref AuthApi.Stage
+      ApiMappingKey: auth
+
+  # ── Health ────────────────────────────────────────────────────────────────────
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-health"
+      CodeUri: src/
+      Handler: handlers/health/index.handler
+      Description: Auth service health check
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/health/index.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Cognito trigger ───────────────────────────────────────────────────────────
+  # Cognito waits at most 5s and retries up to 3 times; the handler is an idempotent upsert.
+  PostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-post-confirmation"
+      CodeUri: src/
+      Handler: handlers/triggers/post-confirmation.handler
+      Description: Add confirmed users to Customers and link (or create) their customer record by email
+      MemorySize: 512
+      Timeout: 5
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        # Wildcard pool ARN: referencing UserPool here would be a circular dependency.
+        - Statement:
+            - Effect: Allow
+              Action: cognito-idp:AdminAddUserToGroup
+              Resource: !Sub "arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*"
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/triggers/post-confirmation.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Auth endpoints (public) ───────────────────────────────────────────────────
+  SignUpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-signup"
+      CodeUri: src/
+      Handler: handlers/auth/signup.handler
+      Description: Register a new customer account
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /signup
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/auth/signup.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  ConfirmSignUpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-confirm-signup"
+      CodeUri: src/
+      Handler: handlers/auth/confirm-signup.handler
+      Description: Confirm a new account with the emailed code
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /confirm-signup
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/auth/confirm-signup.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  ResendCodeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-resend-code"
+      CodeUri: src/
+      Handler: handlers/auth/resend-code.handler
+      Description: Resend the signup confirmation code
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /resend-code
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/auth/resend-code.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  LoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-login"
+      CodeUri: src/
+      Handler: handlers/auth/login.handler
+      Description: Authenticate and return tokens
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /login
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/auth/login.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  RefreshTokenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-refresh"
+      CodeUri: src/
+      Handler: handlers/auth/refresh.handler
+      Description: Exchange a refresh token for new ID/access tokens
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /refresh
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/auth/refresh.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  ForgotPasswordFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-forgot-password"
+      CodeUri: src/
+      Handler: handlers/auth/forgot-password.handler
+      Description: Send a password reset code
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /forgot-password
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/auth/forgot-password.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  ConfirmPasswordFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-confirm-password"
+      CodeUri: src/
+      Handler: handlers/auth/confirm-password.handler
+      Description: Set a new password using the reset code
+      Environment:
+        Variables:
+          COGNITO_CLIENT_ID: !Ref UserPoolClient
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /confirm-password
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/auth/confirm-password.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Customer account (authenticated) ──────────────────────────────────────────
+  GetMeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-get-me"
+      CodeUri: src/
+      Handler: handlers/me/get.handler
+      Description: Get the signed-in customer's profile
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /me
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  UpdateMeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-update-me"
+      CodeUri: src/
+      Handler: handlers/me/update.handler
+      Description: Update the signed-in customer's profile, addresses and consent
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /me
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/update.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Admin ─────────────────────────────────────────────────────────────────────
+  SetRoleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-set-role"
+      CodeUri: src/
+      Handler: handlers/admin/set-role.handler
+      Description: Set a user's role (CUSTOMER / STAFF / ADMIN) — Admins only
+      Environment:
+        Variables:
+          COGNITO_USER_POOL_ID: !Ref UserPool
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminListGroupsForUser
+                - cognito-idp:AdminAddUserToGroup
+                - cognito-idp:AdminRemoveUserFromGroup
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /admin/users/role
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/set-role.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  AuthApiUrl:
+    Description: Execute-api URL (direct)
+    Value: !Sub "https://${AuthApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+  AuthDomainUrl:
+    Description: Custom-domain URL
+    Value: !Sub "https://${ApiDomainName}/auth"

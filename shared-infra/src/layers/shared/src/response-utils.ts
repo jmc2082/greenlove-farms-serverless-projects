@@ -17,4 +17,5 @@ export const unauthorized = (message = 'Unauthorized') => json(401, { error: mes
 export const forbidden = (message = 'Forbidden') => json(403, { error: message });
 export const notFound = (message = 'Not found') => json(404, { error: message });
 export const conflict = (message: string) => json(409, { error: message });
+export const tooManyRequests = (message = 'Too many requests') => json(429, { error: message });
 export const serverError = (message = 'Internal server error') => json(500, { error: message });
