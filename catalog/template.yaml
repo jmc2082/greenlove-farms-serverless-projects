@@ -17,6 +17,12 @@ Parameters:
   ApiDomainName:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /greenlove/dev/api-domain-name
+  UserPoolId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/user-pool-id
+  UserPoolClientId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/client-id
   AllowedOrigins:
     Type: CommaDelimitedList
     Default: http://localhost:3000
@@ -45,6 +51,15 @@ Resources:
     Properties:
       StageName: !Ref Environment
       Description: GreenLove Catalog API
+      Auth:
+        DefaultAuthorizer: CognitoJWT
+        Authorizers:
+          CognitoJWT:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}"
+              audience:
+                - !Ref UserPoolClientId
+            IdentitySource: "$request.header.Authorization"
       CorsConfiguration:
         AllowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
         AllowHeaders: ["Content-Type", "Authorization"]
@@ -75,6 +90,8 @@ Resources:
             ApiId: !Ref CatalogApi
             Path: /health
             Method: GET
+            Auth:
+              Authorizer: NONE
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -102,6 +119,8 @@ Resources:
             ApiId: !Ref CatalogApi
             Path: /products
             Method: GET
+            Auth:
+              Authorizer: NONE
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -128,6 +147,8 @@ Resources:
             ApiId: !Ref CatalogApi
             Path: /products/{slug}
             Method: GET
+            Auth:
+              Authorizer: NONE
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -135,6 +156,166 @@ Resources:
         Target: es2022
         Sourcemap: true
         EntryPoints: [handlers/products/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Admin (Staff / Admins) ────────────────────────────────────────────────────
+  AdminListProductsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-list-products"
+      CodeUri: src/
+      Handler: handlers/admin/products/list.handler
+      Description: List all products incl. drafts/archived (search, filter)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/products
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/products/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminGetProductFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-get-product"
+      CodeUri: src/
+      Handler: handlers/admin/products/get.handler
+      Description: Get any product by id (full admin view)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/products/{id}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/products/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminCreateProductFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-create-product"
+      CodeUri: src/
+      Handler: handlers/admin/products/create.handler
+      Description: Create a product
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/products
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/products/create.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminUpdateProductFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-update-product"
+      CodeUri: src/
+      Handler: handlers/admin/products/update.handler
+      Description: Partially update a product (requires current version)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/products/{id}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/products/update.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminAdjustInventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-adjust-inventory"
+      CodeUri: src/
+      Handler: handlers/admin/products/adjust-inventory.handler
+      Description: Adjust a STOCKED variant's on-hand count (logged)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/products/{id}/inventory
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/products/adjust-inventory.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminSignImageUploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-sign-image-upload"
+      CodeUri: src/
+      Handler: handlers/admin/images/sign.handler
+      Description: Sign a direct-to-Cloudinary product image upload
+      Environment:
+        Variables:
+          CLOUDINARY_URL_PARAM: !Sub "/greenlove/${Environment}/cloudinary-url"
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/cloudinary-url"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/images/sign
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/images/sign.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
 
 Outputs:

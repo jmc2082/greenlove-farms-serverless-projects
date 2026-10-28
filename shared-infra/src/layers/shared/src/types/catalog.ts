@@ -48,6 +48,8 @@ export interface Product {
   images: ProductImage[];
   variants: ProductVariant[];
   squareItemId?: string;
+  // Bumped by every write that touches variants (edits, inventory, checkout holds) for optimistic concurrency.
+  version: number;
   createdAt: Date;
   updatedAt: Date;
 }

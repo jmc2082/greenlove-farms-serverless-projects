@@ -20,3 +20,12 @@ export function toPublicProduct(p: Product) {
     })),
   };
 }
+
+// Staff/Admin shape: everything, with ids as strings. Send `version` back on update.
+export function toAdminProduct({ _id, variants, ...rest }: Product) {
+  return {
+    id: _id.toHexString(),
+    ...rest,
+    variants: variants.map(({ _id: vId, ...v }) => ({ id: vId.toHexString(), ...v })),
+  };
+}

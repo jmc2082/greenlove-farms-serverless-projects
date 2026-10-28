@@ -13,7 +13,7 @@ parallel = true
 
 [default.deploy.parameters]
 resolve_s3 = true
-parameter_overrides = "Environment=\"dev\" MongoDbName=\"greenlove_dev\" SharedLayerArn=\"/greenlove/dev/shared-layer-arn\" ApiDomainName=\"/greenlove/dev/api-domain-name\" AllowedOrigins=\"http://localhost:3000\""
+parameter_overrides = "Environment=\"dev\" MongoDbName=\"greenlove_dev\" SharedLayerArn=\"/greenlove/dev/shared-layer-arn\" ApiDomainName=\"/greenlove/dev/api-domain-name\" UserPoolId=\"/greenlove/dev/cognito/user-pool-id\" UserPoolClientId=\"/greenlove/dev/cognito/client-id\" AllowedOrigins=\"http://localhost:3000\""
 s3_prefix = "greenlove-catalog"
 image_repositories = []
 
@@ -34,7 +34,7 @@ parallel = true
 
 [dev.deploy.parameters]
 resolve_s3 = true
-parameter_overrides = "Environment=\"dev\" MongoDbName=\"greenlove_dev\" SharedLayerArn=\"/greenlove/dev/shared-layer-arn\" ApiDomainName=\"/greenlove/dev/api-domain-name\" AllowedOrigins=\"http://localhost:3000\""
+parameter_overrides = "Environment=\"dev\" MongoDbName=\"greenlove_dev\" SharedLayerArn=\"/greenlove/dev/shared-layer-arn\" ApiDomainName=\"/greenlove/dev/api-domain-name\" UserPoolId=\"/greenlove/dev/cognito/user-pool-id\" UserPoolClientId=\"/greenlove/dev/cognito/client-id\" AllowedOrigins=\"http://localhost:3000\""
 s3_prefix = "greenlove-catalog"
 image_repositories = []
 
@@ -55,6 +55,6 @@ parallel = true
 
 [prod.deploy.parameters]
 resolve_s3 = true
-parameter_overrides = "Environment=\"prod\" MongoDbName=\"greenlove_prod\" SharedLayerArn=\"/greenlove/prod/shared-layer-arn\" ApiDomainName=\"/greenlove/prod/api-domain-name\" AllowedOrigins=\"https://greenlove-farms.com,https://www.greenlove-farms.com\""
+parameter_overrides = "Environment=\"prod\" MongoDbName=\"greenlove_prod\" SharedLayerArn=\"/greenlove/prod/shared-layer-arn\" ApiDomainName=\"/greenlove/prod/api-domain-name\" UserPoolId=\"/greenlove/prod/cognito/user-pool-id\" UserPoolClientId=\"/greenlove/prod/cognito/client-id\" AllowedOrigins=\"https://greenlove-farms.com,https://www.greenlove-farms.com\""
 s3_prefix = "greenlove-catalog-prod"
 image_repositories = []

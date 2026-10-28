@@ -64,13 +64,15 @@ greenlove-farms-serverless-projects/
   shared-infra/     Lambda layer (mongo, responses, jwt, money, dates), API domain, SSM params
   auth/             Cognito pool (emails via SES), groups, post-confirmation links the guest customer record
                     by verified email; /signup never writes to Mongo
-  catalog/          products, variants, fulfillment profiles, inventory, Square catalog import
-  images/           Cloudinary signing + image refs
+  catalog/          products, variants, fulfillment profiles, inventory (+ adjustment log), Cloudinary upload
+                    signing (product images only in Phase 1, so no separate images stack), Square catalog import
   carts/            server-side carts, product views, watchlist
   checkout/         quote engine, holds, Square payment, order creation, Square webhooks
   orders/           order + fulfillment-group reads and admin status changes, guest lookup
   notifications/    SES templates, transactional sends, abandoned-cart sweep
 ```
+
+Products carry a `version` bumped by every write that touches variants (edits, inventory, checkout holds); updates must send the version they read (409 otherwise). Perishable or `TCS` products can never include `SHIP`. Images are Cloudinary public IDs under `greenlove/{env}/products/`.
 
 Each stack: `template.yaml`, `samconfig.toml` (default/dev/prod), `package.json`, `tsconfig.json`, `.env.example`, `src/handlers`, `src/lib`. Shared helpers live **only** in the layer — no copies in stack `src/lib`.
 
@@ -159,8 +161,7 @@ Short-lived reservation of inventory (Phase 2: juice slot / crop capacity) betwe
 
 | Stack | Public | Authenticated / Admin |
 |---|---|---|
-| catalog | `GET /products`, `GET /products/{slug}` | Admin: CRUD products/variants, adjust inventory, `POST /admin/square/import` |
-| images | — | Admin: `POST /images/sign` |
+| catalog | `GET /products`, `GET /products/{slug}` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`; later `POST /admin/square/import` |
 | carts | `POST /carts`, `GET/PUT /carts/{id}`, `POST /carts/{id}/items`, `POST /views`, `POST /watchlist` | Customer: `POST /carts/{id}/merge` |
 | checkout | `POST /checkout/quote`, `POST /checkout/pay`, `POST /checkout/webhooks/square` | — |
 | orders | `GET /orders/lookup?token=` | Customer: `GET /me/orders`; Admin: list/filter by delivery day, update fulfillment-group status, refund |

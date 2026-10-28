@@ -10,7 +10,7 @@ Architecture and domain model: [docs/architecture.md](docs/architecture.md).
 | `domain-infra` | once | SES `greenlove-farms.com` identity + DKIM/MAIL FROM/DMARC, ACM cert, `api.` / `api-dev.` custom domains |
 | `shared-infra` | per env | `@greenlove/shared` Lambda layer, SES configuration sets, SSM params |
 | `auth` | per env | Cognito pool (Customers / Staff / Admins), signup/login, `/me`, admin roles — `.../auth` |
-| `catalog` | per env | Products API, served at `https://api[-dev].greenlove-farms.com/catalog` |
+| `catalog` | per env | Products API + Staff/Admin product management + Cloudinary upload signing — `https://api[-dev].greenlove-farms.com/catalog` |
 
 Shared helpers live only in `shared-infra/src/layers/shared/src` and are compiled into the layer as `@greenlove/shared`.
 Stacks import from `@greenlove/shared` (resolved via `tsconfig` paths for typechecking, marked external in esbuild).
@@ -28,6 +28,11 @@ aws ssm put-parameter --profile jm_ubuntu_thinkpad_user --region us-east-2 \
   --name /greenlove/dev/mongodb-uri --type SecureString --value '<dev connection string>'
 aws ssm put-parameter --profile jm_ubuntu_thinkpad_user --region us-east-2 \
   --name /greenlove/prod/mongodb-uri --type SecureString --value '<prod connection string>'
+# Cloudinary, in its own URL format (Dashboard → API Keys); same account for both envs, folders keep them apart
+aws ssm put-parameter --profile jm_ubuntu_thinkpad_user --region us-east-2 \
+  --name /greenlove/dev/cloudinary-url --type SecureString --value 'cloudinary://<api_key>:<api_secret>@<cloud_name>'
+aws ssm put-parameter --profile jm_ubuntu_thinkpad_user --region us-east-2 \
+  --name /greenlove/prod/cloudinary-url --type SecureString --value 'cloudinary://<api_key>:<api_secret>@<cloud_name>'
 ```
 
 ## Deploy order
@@ -36,7 +41,7 @@ aws ssm put-parameter --profile jm_ubuntu_thinkpad_user --region us-east-2 \
 (cd domain-infra && sam build && sam deploy)                          # once
 (cd shared-infra && sam build && sam deploy --config-env dev)
 (cd auth         && sam build && sam deploy --config-env dev)   # needs domain-infra's SES identity verified
-(cd catalog      && sam build && sam deploy --config-env dev)
+(cd catalog      && sam build && sam deploy --config-env dev)   # reads Cognito ids from auth's SSM params
 ```
 
 Prod: same commands with `--config-env prod`.
