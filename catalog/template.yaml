@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Catalog Stack (products, variants, fulfillment profiles)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  MongoDbName:
+    Type: String
+    Default: greenlove_dev
+  SharedLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/shared-layer-arn
+  ApiDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/api-domain-name
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    MemorySize: 256
+    Timeout: 15
+    Architectures:
+      - arm64
+    Layers:
+      - !Ref SharedLayerArn
+    Environment:
+      Variables:
+        MONGODB_URI_PARAM: !Sub "/greenlove/${Environment}/mongodb-uri"
+        MONGODB_DB_NAME: !Ref MongoDbName
+        ENVIRONMENT: !Ref Environment
+        SERVICE_VERSION: "0.1.0"
+
+Resources:
+
+  # ── HTTP API ──────────────────────────────────────────────────────────────────
+  CatalogApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: GreenLove Catalog API
+      CorsConfiguration:
+        AllowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        AllowHeaders: ["Content-Type", "Authorization"]
+        AllowOrigins: !Ref AllowedOrigins
+        MaxAge: 600
+
+  # Served at https://<ApiDomainName>/catalog/...
+  CatalogApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref ApiDomainName
+      ApiId: !Ref CatalogApi
+      Stage: !Ref CatalogApi.Stage
+      ApiMappingKey: catalog
+
+  # ── Health ────────────────────────────────────────────────────────────────────
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-health"
+      CodeUri: src/
+      Handler: handlers/health/index.handler
+      Description: Catalog service health check
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /health
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/health/index.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Products (public) ─────────────────────────────────────────────────────────
+  ListProductsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-list-products"
+      CodeUri: src/
+      Handler: handlers/products/list.handler
+      Description: List active products (paginated, filter by category / fulfillment class)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /products
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/products/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  GetProductFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-get-product"
+      CodeUri: src/
+      Handler: handlers/products/get.handler
+      Description: Get a single active product by slug
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /products/{slug}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/products/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+Outputs:
+  CatalogApiUrl:
+    Description: Execute-api URL (direct)
+    Value: !Sub "https://${CatalogApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+  CatalogDomainUrl:
+    Description: Custom-domain URL
+    Value: !Sub "https://${ApiDomainName}/catalog"

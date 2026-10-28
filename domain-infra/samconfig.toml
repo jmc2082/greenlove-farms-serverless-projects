@@ -1,0 +1,13 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "greenlove-domain-infra"
+region     = "us-east-2"
+profile    = "jm_ubuntu_thinkpad_user"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[default.deploy.parameters]
+resolve_s3 = true
+s3_prefix = "greenlove-domain-infra"
+image_repositories = []

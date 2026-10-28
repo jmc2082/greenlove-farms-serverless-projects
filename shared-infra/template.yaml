@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Shared Infrastructure (Lambda Layer, SES configuration sets, SSM params)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  FromTransactional:
+    Type: String
+    Default: "GreenLove Farms <orders@greenlove-farms.com>"
+  FromMarketing:
+    Type: String
+    Default: "GreenLove Farms <hello@greenlove-farms.com>"
+  ReplyTo:
+    Type: String
+    Default: mail@oarsland.com
+    Description: Must be a mailbox that receives mail (greenlove-farms.com has no MX yet)
+
+Resources:
+
+  # ── Shared Lambda Layer ───────────────────────────────────────────────────────
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "greenlove-shared-layer-${Environment}"
+      Description: "@greenlove/shared helpers + MongoDB driver + AWS SDK clients"
+      ContentUri: src/layers/shared/
+      CompatibleRuntimes:
+        - nodejs24.x
+      CompatibleArchitectures:
+        - arm64
+      RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: makefile
+
+  # ── SES configuration sets ────────────────────────────────────────────────────
+  TransactionalConfigSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub "greenlove-transactional-${Environment}"
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+
+  MarketingConfigSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub "greenlove-marketing-${Environment}"
+      ReputationOptions:
+        ReputationMetricsEnabled: true
+      SendingOptions:
+        SendingEnabled: true
+
+  # ── SSM Parameters ────────────────────────────────────────────────────────────
+  SharedLayerArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/shared-layer-arn"
+      Type: String
+      Value: !Ref SharedLayer
+
+  TransactionalConfigSetParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/ses/transactional-config-set"
+      Type: String
+      Value: !Ref TransactionalConfigSet
+
+  MarketingConfigSetParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/ses/marketing-config-set"
+      Type: String
+      Value: !Ref MarketingConfigSet
+
+  FromTransactionalParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/ses/from-transactional"
+      Type: String
+      Value: !Ref FromTransactional
+
+  FromMarketingParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/ses/from-marketing"
+      Type: String
+      Value: !Ref FromMarketing
+
+  ReplyToParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/greenlove/${Environment}/ses/reply-to"
+      Type: String
+      Value: !Ref ReplyTo
+
+Outputs:
+  SharedLayerArn:
+    Description: Shared Lambda Layer ARN
+    Value: !Ref SharedLayer
+
+  SharedLayerArnParamName:
+    Description: SSM param name for the shared layer ARN
+    Value: !Sub "/greenlove/${Environment}/shared-layer-arn"

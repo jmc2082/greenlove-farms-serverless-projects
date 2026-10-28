@@ -1,0 +1,52 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "greenlove-shared-infra"
+region     = "us-east-2"
+profile    = "jm_ubuntu_thinkpad_user"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[default.build.parameters]
+cached   = true
+parallel = true
+
+[default.deploy.parameters]
+resolve_s3 = true
+parameter_overrides = "Environment=\"dev\""
+s3_prefix = "greenlove-shared-infra"
+image_repositories = []
+
+[dev.global.parameters]
+stack_name = "greenlove-shared-infra"
+region     = "us-east-2"
+profile    = "jm_ubuntu_thinkpad_user"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[dev.build.parameters]
+cached   = true
+parallel = true
+
+[dev.deploy.parameters]
+resolve_s3 = true
+parameter_overrides = "Environment=\"dev\""
+s3_prefix = "greenlove-shared-infra"
+image_repositories = []
+
+[prod.global.parameters]
+stack_name = "greenlove-shared-infra-prod"
+region     = "us-east-2"
+profile    = "jm_ubuntu_thinkpad_user"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[prod.build.parameters]
+cached   = true
+parallel = true
+
+[prod.deploy.parameters]
+resolve_s3 = true
+parameter_overrides = "Environment=\"prod\""
+s3_prefix = "greenlove-shared-infra-prod"
+image_repositories = []

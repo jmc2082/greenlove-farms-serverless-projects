@@ -1,0 +1,30 @@
+# GreenLove Farms Backend AWS SAM CLI Serverless REST API IDEA
+
+- Reference project: "~/Desktop/code-projects/dev-all/event-robin/code/backends/eventrobin-serverless-projects"
+
+// ----------------------------------------------
+# Tech Stack
+
+- AWS SAM CLI TypeScript
+- MongoDB (I'll provide the connection details) - mongo collections could be prefixed with env name before each "dev_" or "prod_" or whatever you think works better. If individual databases work best, let me know.
+- Cloudinary for images and transformations
+- AWS SES for email transactions
+- Environments: DEV and PRODUCTION
+
+
+// ----------------------------------------------
+- AWS Profile to use for access to the project aws:
+-- from the ~/.aws/config
+
+[profile jm_ubuntu_thinkpad_user]
+region = us-east-2
+output = json
+
+
+// ----------------------------------------------
+# Business Rules For Reference:
+
+"/home/joshua/Desktop/code-projects/dev-all/greenlove-farms/code/full-stacks/greenlove-farms-nuxtjs/docs/brainstorming-docs"
+
+
+// ----------------------------------------------

@@ -1,0 +1,15 @@
+{
+  "name": "greenlove-shared-layer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GreenLove shared Lambda layer — runtime dependencies + @greenlove/shared build",
+  "dependencies": {
+    "mongodb": "^6.10.0",
+    "@aws-sdk/client-ssm": "^3.700.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0"
+  }
+}

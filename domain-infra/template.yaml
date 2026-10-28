@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Domain Infrastructure (SES identity, DNS, API custom domains). Deployed once, not per environment.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: greenlove-farms.com
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Default: Z0308600QSM583WB058K
+  DmarcRecord:
+    Type: String
+    Default: "v=DMARC1; p=none"
+    Description: Start with p=none; tighten to p=quarantine once reports are clean
+
+Resources:
+
+  # ── SES domain identity ───────────────────────────────────────────────────────
+  EmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref DomainName
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+      MailFromAttributes:
+        MailFromDomain: !Sub "mail.${DomainName}"
+        BehaviorOnMxFailure: USE_DEFAULT_VALUE
+
+  DkimRecord1:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName1
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue1]
+
+  DkimRecord2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName2
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue2]
+
+  DkimRecord3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt EmailIdentity.DkimDNSTokenName3
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt EmailIdentity.DkimDNSTokenValue3]
+
+  MailFromMxRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "mail.${DomainName}"
+      Type: MX
+      TTL: '1800'
+      ResourceRecords: [!Sub "10 feedback-smtp.${AWS::Region}.amazonses.com"]
+
+  MailFromSpfRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "mail.${DomainName}"
+      Type: TXT
+      TTL: '1800'
+      ResourceRecords: ['"v=spf1 include:amazonses.com ~all"']
+
+  DmarcTxtRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub "_dmarc.${DomainName}"
+      Type: TXT
+      TTL: '1800'
+      ResourceRecords: [!Sub '"${DmarcRecord}"']
+
+  # ── API custom domains ────────────────────────────────────────────────────────
+  ApiCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub "api.${DomainName}"
+      SubjectAlternativeNames:
+        - !Sub "api-dev.${DomainName}"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub "api.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub "api-dev.${DomainName}"
+          HostedZoneId: !Ref HostedZoneId
+
+  ProdApiDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !Sub "api.${DomainName}"
+      DomainNameConfigurations:
+        - CertificateArn: !Ref ApiCertificate
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+
+  DevApiDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !Sub "api-dev.${DomainName}"
+      DomainNameConfigurations:
+        - CertificateArn: !Ref ApiCertificate
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+
+  ProdApiAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ProdApiDomain
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ProdApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt ProdApiDomain.RegionalHostedZoneId
+
+  DevApiAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DevApiDomain
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt DevApiDomain.RegionalDomainName
+        HostedZoneId: !GetAtt DevApiDomain.RegionalHostedZoneId
+
+  # ── SSM Parameters ────────────────────────────────────────────────────────────
+  ProdApiDomainParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /greenlove/prod/api-domain-name
+      Type: String
+      Value: !Ref ProdApiDomain
+
+  DevApiDomainParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /greenlove/dev/api-domain-name
+      Type: String
+      Value: !Ref DevApiDomain
+
+Outputs:
+  ProdApiDomain:
+    Value: !Sub "https://${ProdApiDomain}"
+  DevApiDomain:
+    Value: !Sub "https://${DevApiDomain}"
