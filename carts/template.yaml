@@ -1,0 +1,408 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Carts Stack (server-side carts, product views, watchlist)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  MongoDbName:
+    Type: String
+    Default: greenlove_dev
+  SharedLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/shared-layer-arn
+  ApiDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/api-domain-name
+  UserPoolId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/user-pool-id
+  UserPoolClientId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/client-id
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    MemorySize: 256
+    Timeout: 15
+    Architectures:
+      - arm64
+    Layers:
+      - !Ref SharedLayerArn
+    Environment:
+      Variables:
+        MONGODB_URI_PARAM: !Sub "/greenlove/${Environment}/mongodb-uri"
+        MONGODB_DB_NAME: !Ref MongoDbName
+        ENVIRONMENT: !Ref Environment
+        SERVICE_VERSION: "0.1.0"
+
+Resources:
+
+  # ── HTTP API ──────────────────────────────────────────────────────────────────
+  CartsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: GreenLove Carts API
+      Auth:
+        DefaultAuthorizer: CognitoJWT
+        Authorizers:
+          CognitoJWT:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}"
+              audience:
+                - !Ref UserPoolClientId
+            IdentitySource: "$request.header.Authorization"
+      CorsConfiguration:
+        AllowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        AllowHeaders: ["Content-Type", "Authorization"]
+        AllowOrigins: !Ref AllowedOrigins
+        MaxAge: 600
+
+  # Served at https://<ApiDomainName>/carts/...
+  CartsApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref ApiDomainName
+      ApiId: !Ref CartsApi
+      Stage: !Ref CartsApi.Stage
+      ApiMappingKey: carts
+
+  # ── Health ────────────────────────────────────────────────────────────────────
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-health"
+      CodeUri: src/
+      Handler: handlers/health/index.handler
+      Description: Carts service health check
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/health/index.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Carts (anonymous by cartId, or the signed-in customer's cart) ─────────────
+  CreateCartFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-create-cart"
+      CodeUri: src/
+      Handler: handlers/carts/create.handler
+      Description: Create an anonymous cart
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /new
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/carts/create.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  GetCartFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-get-cart"
+      CodeUri: src/
+      Handler: handlers/carts/get.handler
+      Description: Get a cart with current prices and availability
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /{cartId}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        SignedIn1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/cart
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/carts/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  SetCartItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-set-cart-item"
+      CodeUri: src/
+      Handler: handlers/carts/set-item.handler
+      Description: Add or set the quantity of a cart line
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /{cartId}/items
+            Method: PUT
+            Auth:
+              Authorizer: NONE
+        SignedIn1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/cart/items
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/carts/set-item.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  RemoveCartItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-remove-cart-item"
+      CodeUri: src/
+      Handler: handlers/carts/remove-item.handler
+      Description: Remove a cart line
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /{cartId}/items/{variantId}
+            Method: DELETE
+            Auth:
+              Authorizer: NONE
+        SignedIn1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/cart/items/{variantId}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/carts/remove-item.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  SetCartContactFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-set-cart-contact"
+      CodeUri: src/
+      Handler: handlers/carts/set-contact.handler
+      Description: Store guest email + marketing consent on a cart
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /{cartId}/contact
+            Method: PUT
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/carts/set-contact.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  MergeCartFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-merge-cart"
+      CodeUri: src/
+      Handler: handlers/me/merge.handler
+      Description: Fold the browser's anonymous cart into the customer's cart after login
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        SignedIn0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/cart/merge
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/merge.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Product views + watchlist ─────────────────────────────────────────────────
+  RecordViewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-record-view"
+      CodeUri: src/
+      Handler: handlers/views/record.handler
+      Description: Record a product view (per cart or customer)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /{cartId}/views
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        SignedIn1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/views
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/views/record.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  ListWatchlistFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-list-watchlist"
+      CodeUri: src/
+      Handler: handlers/watchlist/list.handler
+      Description: List the customer's watchlist
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        SignedIn0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/watchlist
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/watchlist/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AddWatchlistFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-add-watchlist"
+      CodeUri: src/
+      Handler: handlers/watchlist/add.handler
+      Description: Add a product to the watchlist
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        SignedIn0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/watchlist/{productId}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/watchlist/add.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  RemoveWatchlistFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-remove-watchlist"
+      CodeUri: src/
+      Handler: handlers/watchlist/remove.handler
+      Description: Remove a product from the watchlist
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        SignedIn0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/watchlist/{productId}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/watchlist/remove.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+Outputs:
+  CartsApiUrl:
+    Description: Execute-api URL (direct)
+    Value: !Sub "https://${CartsApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+  CartsDomainUrl:
+    Description: Custom-domain URL
+    Value: !Sub "https://${ApiDomainName}/carts"

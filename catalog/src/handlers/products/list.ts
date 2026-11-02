@@ -1,7 +1,6 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { Filter } from 'mongodb';
-import { getDb, ok, badRequest, serverError, Product, FULFILLMENT_CLASSES, FulfillmentClass } from '@greenlove/shared';
-import { toPublicProduct } from '../../lib/product-view';
+import { getDb, ok, badRequest, serverError, Product, FULFILLMENT_CLASSES, FulfillmentClass, toPublicProduct } from '@greenlove/shared';
 
 const DEFAULT_LIMIT = 24;
 const MAX_LIMIT = 100;

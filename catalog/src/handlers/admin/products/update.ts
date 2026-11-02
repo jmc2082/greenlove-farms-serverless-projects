@@ -1,9 +1,8 @@
 import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { ObjectId } from 'mongodb';
-import { getDb, isStaff, ok, badRequest, forbidden, notFound, conflict, serverError, Product } from '@greenlove/shared';
+import { getDb, isStaff, ok, badRequest, forbidden, notFound, conflict, serverError, Product, toAdminProduct } from '@greenlove/shared';
 import { validateProduct, toEditableInput } from '../../../lib/product-validation';
 import { productImageFolder } from '../../../lib/cloudinary';
-import { toAdminProduct } from '../../../lib/product-view';
 
 // Partial update: provided fields are merged over the current product and the result is re-validated as a whole.
 // `version` (from the last read) is required so concurrent edits / stock changes are never silently overwritten.

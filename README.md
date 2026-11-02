@@ -10,6 +10,7 @@ Architecture and domain model: [docs/architecture.md](docs/architecture.md).
 | `domain-infra` | once | SES `greenlove-farms.com` identity + DKIM/MAIL FROM/DMARC, ACM cert, `api.` / `api-dev.` custom domains |
 | `shared-infra` | per env | `@greenlove/shared` Lambda layer, SES configuration sets, SSM params |
 | `auth` | per env | Cognito pool (Customers / Staff / Admins), signup/login, `/me`, admin roles — `.../auth` |
+| `carts` | per env | Server-side carts (anonymous by `cartId` or `/me/cart`), merge on login, product views, watchlist — `.../carts` |
 | `catalog` | per env | Products API + Staff/Admin product management + Cloudinary upload signing — `https://api[-dev].greenlove-farms.com/catalog` |
 
 Shared helpers live only in `shared-infra/src/layers/shared/src` and are compiled into the layer as `@greenlove/shared`.
@@ -22,6 +23,7 @@ Stacks import from `@greenlove/shared` (resolved via `tsconfig` paths for typech
 (cd shared-infra/src/layers/shared && npm install)
 (cd auth && npm install)
 (cd catalog && npm install)
+(cd carts && npm install)
 
 # 2. Secrets — SecureString params are created by hand, never in templates
 aws ssm put-parameter --profile jm_ubuntu_thinkpad_user --region us-east-2 \
@@ -42,15 +44,24 @@ aws ssm put-parameter --profile jm_ubuntu_thinkpad_user --region us-east-2 \
 (cd shared-infra && sam build && sam deploy --config-env dev)
 (cd auth         && sam build && sam deploy --config-env dev)   # needs domain-infra's SES identity verified
 (cd catalog      && sam build && sam deploy --config-env dev)   # reads Cognito ids from auth's SSM params
+(cd carts        && sam build && sam deploy --config-env dev)
 ```
 
 Prod: same commands with `--config-env prod`.
+
+Or use the script, which runs the same steps in order (`domain-infra` only when named):
+
+```bash
+./deploy.sh dev                  # shared-infra, auth, catalog, carts
+./deploy.sh prod catalog carts   # just the named stacks
+./deploy.sh dev domain-infra
+```
 
 After the first deploy, create indexes:
 
 ```bash
 export MONGODB_URI='<conn>' MONGODB_DB_NAME=greenlove_dev
-(cd auth && npm run indexes) && (cd catalog && npm run indexes)
+for s in auth catalog carts; do (cd $s && npm run indexes); done
 ```
 
 First admin (sign up and confirm through the API first; after that, admins use `POST /auth/admin/users/role`):

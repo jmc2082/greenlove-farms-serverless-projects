@@ -1,4 +1,8 @@
-import { Product } from '@greenlove/shared';
+import { Product, ProductVariant } from '../types/catalog';
+
+// null = not inventory-tracked (made/grown to order).
+export const availableUnits = (v: ProductVariant): number | null =>
+  v.inventory ? Math.max(0, v.inventory.onHand - v.inventory.held) : null;
 
 // Public shape: hides internal fields (Square IDs, raw inventory counters).
 export function toPublicProduct(p: Product) {
@@ -16,7 +20,7 @@ export function toPublicProduct(p: Product) {
       sku: v.sku,
       name: v.name,
       priceCents: v.priceCents,
-      available: v.inventory ? Math.max(0, v.inventory.onHand - v.inventory.held) : null,
+      available: availableUnits(v),
     })),
   };
 }

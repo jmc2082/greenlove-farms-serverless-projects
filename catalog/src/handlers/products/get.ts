@@ -1,6 +1,5 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { getDb, ok, badRequest, notFound, serverError, Product } from '@greenlove/shared';
-import { toPublicProduct } from '../../lib/product-view';
+import { getDb, ok, badRequest, notFound, serverError, Product, toPublicProduct } from '@greenlove/shared';
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
   const slug = event.pathParameters?.['slug'];

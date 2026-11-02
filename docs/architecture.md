@@ -120,7 +120,7 @@ One per email; optionally linked to a Cognito user.
   status: 'ACTIVE' | 'CHECKING_OUT' | 'CONVERTED' | 'ABANDONED',
   abandonedEmailSentAt?, updatedAt, expiresAt }   // TTL index on expiresAt
 ```
-Carts never reserve stock. Anonymous cart merges into the customer cart on login.
+Carts never reserve stock. Anonymous cart merges into the customer cart on login (claimed outright if the customer has no active cart, otherwise lines folded in and the anonymous cart marked `MERGED`). A cart linked to a customer is reachable only via `/me/cart` — never by its `cartId` — so a cartId left in a logged-out browser can't reopen it. At most one `ACTIVE` cart per customer (unique partial index). TTL: 30 days after last write, 7 days for a never-used cart. `contact` (guest email + consent) is stored on the cart only, never on `customers`, because that endpoint is unauthenticated.
 
 ### `productViews` (TTL ~90 days) and `watchlist`
 `{ cartId?, customerId?, productId, viewedAt }` · `{ customerId | email, productId, createdAt }`
@@ -162,7 +162,7 @@ Short-lived reservation of inventory (Phase 2: juice slot / crop capacity) betwe
 | Stack | Public | Authenticated / Admin |
 |---|---|---|
 | catalog | `GET /products`, `GET /products/{slug}` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`; later `POST /admin/square/import` |
-| carts | `POST /carts`, `GET/PUT /carts/{id}`, `POST /carts/{id}/items`, `POST /views`, `POST /watchlist` | Customer: `POST /carts/{id}/merge` |
+| carts | `POST /carts/new`, `GET /carts/{cartId}`, `PUT /carts/{cartId}/items`, `DELETE /carts/{cartId}/items/{variantId}`, `PUT /carts/{cartId}/contact`, `POST /carts/{cartId}/views` | Customer: `GET /me/cart`, `PUT /me/cart/items`, `DELETE /me/cart/items/{variantId}`, `POST /me/cart/merge`, `POST /me/views`, `GET /me/watchlist`, `PUT/DELETE /me/watchlist/{productId}` |
 | checkout | `POST /checkout/quote`, `POST /checkout/pay`, `POST /checkout/webhooks/square` | — |
 | orders | `GET /orders/lookup?token=` | Customer: `GET /me/orders`; Admin: list/filter by delivery day, update fulfillment-group status, refund |
 | auth | `POST /signup`, `/confirm-signup`, `/resend-code`, `/login`, `/refresh`, `/forgot-password`, `/confirm-password` | Customer: `GET/PUT /me`; Admin: `POST /admin/users/role` |

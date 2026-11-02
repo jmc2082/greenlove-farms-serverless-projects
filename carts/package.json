@@ -1,0 +1,19 @@
+{
+  "name": "greenlove-carts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "sam build",
+    "deploy": "sam deploy",
+    "local": "sam local start-api --env-vars env.json",
+    "indexes": "node scripts/ensure-indexes.mjs"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "mongodb": "^6.10.0",
+    "typescript": "^5.6.0"
+  }
+}

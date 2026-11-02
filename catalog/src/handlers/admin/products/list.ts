@@ -1,7 +1,6 @@
 import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { Filter } from 'mongodb';
-import { getDb, isStaff, ok, badRequest, forbidden, serverError, Product, PRODUCT_STATUSES, ProductStatus } from '@greenlove/shared';
-import { toAdminProduct } from '../../../lib/product-view';
+import { getDb, isStaff, ok, badRequest, forbidden, serverError, Product, PRODUCT_STATUSES, ProductStatus, toAdminProduct } from '@greenlove/shared';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;

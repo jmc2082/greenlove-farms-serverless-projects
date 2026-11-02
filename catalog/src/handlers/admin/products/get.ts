@@ -1,7 +1,6 @@
 import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { ObjectId } from 'mongodb';
-import { getDb, isStaff, ok, badRequest, forbidden, notFound, serverError, Product } from '@greenlove/shared';
-import { toAdminProduct } from '../../../lib/product-view';
+import { getDb, isStaff, ok, badRequest, forbidden, notFound, serverError, Product, toAdminProduct } from '@greenlove/shared';
 
 export const handler = async (
   event: APIGatewayProxyEventV2WithJWTAuthorizer

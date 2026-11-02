@@ -1,7 +1,6 @@
 import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { ObjectId } from 'mongodb';
-import { getDb, getClaims, isStaff, ok, badRequest, forbidden, conflict, serverError, Product } from '@greenlove/shared';
-import { toAdminProduct } from '../../../lib/product-view';
+import { getDb, getClaims, isStaff, ok, badRequest, forbidden, conflict, serverError, Product, toAdminProduct } from '@greenlove/shared';
 
 const REASONS = ['RESTOCK', 'COUNT_CORRECTION', 'DAMAGED', 'MARKET_SALE', 'OTHER'] as const;
 type Reason = (typeof REASONS)[number];
