@@ -81,6 +81,9 @@ export function validateProduct(
   const fulfillmentClass = raw['fulfillmentClass'] as FulfillmentClass;
   if (!FULFILLMENT_CLASSES.includes(fulfillmentClass)) {
     errors['fulfillmentClass'] = `one of ${FULFILLMENT_CLASSES.join(', ')}`;
+  } else if (status === 'ACTIVE' && fulfillmentClass !== 'STOCKED') {
+    // Phase 1 checkout only quotes stocked items; other classes can be drafted but not sold yet.
+    errors['status'] = `${fulfillmentClass} products cannot be ACTIVE until checkout supports them — keep as DRAFT`;
   }
 
   const regulatoryClass = raw['regulatoryClass'] as RegulatoryClass;

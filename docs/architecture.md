@@ -72,7 +72,7 @@ greenlove-farms-serverless-projects/
   notifications/    SES templates, transactional sends, abandoned-cart sweep
 ```
 
-Products carry a `version` bumped by every write that touches variants (edits, inventory, checkout holds); updates must send the version they read (409 otherwise). Perishable or `TCS` products can never include `SHIP`. Images are Cloudinary public IDs under `greenlove/{env}/products/`.
+Products carry a `version` bumped by every write that touches variants (edits, inventory, checkout holds); updates must send the version they read (409 otherwise). Perishable or `TCS` products can never include `SHIP`. In Phase 1 only `STOCKED` products can be `ACTIVE`; the other classes stay `DRAFT` until checkout supports them. Images are Cloudinary public IDs under `greenlove/{env}/products/`.
 
 Each stack: `template.yaml`, `samconfig.toml` (default/dev/prod), `package.json`, `tsconfig.json`, `.env.example`, `src/handlers`, `src/lib`. Shared helpers live **only** in the layer — no copies in stack `src/lib`.
 
