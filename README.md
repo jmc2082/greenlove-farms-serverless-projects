@@ -60,9 +60,13 @@ Or use the script, which runs the same steps in order (`domain-infra` only when 
 After the first deploy, create indexes:
 
 ```bash
-export MONGODB_URI='<conn>' MONGODB_DB_NAME=greenlove_dev
-for s in auth catalog carts; do (cd $s && npm run indexes); done
+for s in auth catalog carts; do ./scripts/with-db.sh dev -- npm --prefix $s run indexes; done
+for s in auth catalog carts; do ./scripts/with-db.sh prod -- npm --prefix $s run indexes; done   # asks you to type "prod"
 ```
+
+`scripts/with-db.sh dev|prod -- <command>` reads `/greenlove/<env>/mongodb-uri` from SSM and sets `MONGODB_URI` and `MONGODB_DB_NAME` (`greenlove_dev` / `greenlove_prod`) for that one command, so local tools hit the same database as the deployed environment. Prod always asks for confirmation (`CONFIRM_PROD=yes` skips it). Deployed functions never read `.env`.
+
+Use a separate Atlas user per environment: `greenlove_dev_user` with readWrite on `greenlove_dev` only, and `greenlove_prod_user` with readWrite on `greenlove_prod` only. Then a dev connection string can't touch prod data, even by mistake.
 
 First admin (sign up and confirm through the API first; after that, admins use `POST /auth/admin/users/role`):
 
