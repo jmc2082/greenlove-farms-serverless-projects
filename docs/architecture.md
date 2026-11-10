@@ -2,6 +2,8 @@
 
 Status: draft · 2026-10-27
 
+> **Update 2026-11-09:** payments moved from Square to **Stripe**, and sales tax now uses Stripe Tax. Sections that mention Square (payments, checkout flow, webhooks, `squareItemId` fields) are out of date. See [roadmap-and-status.md](roadmap-and-status.md) for current status and decisions.
+
 Business rules: `greenlove-farms-nuxtjs/docs/brainstorming-docs/` (Fulfilment Model, Cart/Checkout Scenarios).
 Reference implementation: `event-robin/code/backends/eventrobin-serverless-projects`.
 
@@ -81,7 +83,12 @@ Each stack: `template.yaml`, `samconfig.toml` (default/dev/prod), `package.json`
 ### `products`
 ```ts
 {
-  _id, slug, name, description, category,
+  _id, slug, name, description,
+  shortDescription, searchTerms: string[], storage,  // card text, search synonyms, storage/shelf life
+  label?: { ingredients, allergens: string[], statement? },
+  featuredRank: number,                             // higher first in the Featured sort; 0 = not featured
+  badges: ('NEW' | 'BESTSELLER' | 'LIMITED' | 'SEASONAL' | 'STAFF_PICK')[],
+  category,                                         // a categories.slug
   status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED',
   fulfillmentClass: 'STOCKED' | 'MADE_TO_ORDER' | 'GROW_TO_ORDER' | 'CROP_RESERVATION',
   fulfillmentProfile: {
@@ -94,15 +101,19 @@ Each stack: `template.yaml`, `samconfig.toml` (default/dev/prod), `package.json`
   taxCategory: string,                              // maps to a rate in settings
   images: { publicId: string; alt: string }[],
   variants: [{
-    _id, sku, name, priceCents, weightOz,
+    _id, sku, name, priceCents, weightOz, netWeight?,  // weightOz is for shipping; netWeight is label text
     inventory?: { onHand: number; held: number },   // STOCKED only
-    squareVariationId?: string,
   }],
-  squareItemId?: string,
   createdAt, updatedAt,
 }
 ```
-`regulatoryClass` and `fulfillmentProfile.methods` decide eligibility (e.g. TCS/perishable → no `SHIP`).
+`regulatoryClass` and `fulfillmentProfile.methods` decide eligibility (e.g. TCS/perishable → no `SHIP`). `COSMETIC`, `COTTAGE_FOOD` and `TCS` products need `label.ingredients` before they can be `ACTIVE`, and `COTTAGE_FOOD` also needs `label.statement`.
+
+### `categories`
+```ts
+{ _id, slug, name, blurb, image?: { publicId, alt }, sortOrder: number, status: 'ACTIVE' | 'HIDDEN', createdAt, updatedAt }
+```
+Products point at a category by slug, so a category's slug never changes. Retire one by setting it `HIDDEN`.
 
 ### `customers`
 One per email; optionally linked to a Cognito user.
@@ -161,7 +172,7 @@ Short-lived reservation of inventory (Phase 2: juice slot / crop capacity) betwe
 
 | Stack | Public | Authenticated / Admin |
 |---|---|---|
-| catalog | `GET /products`, `GET /products/{slug}` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`; later `POST /admin/square/import` |
+| catalog | `GET /products`, `GET /products/{slug}`, `GET /categories` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`, `GET /admin/categories`, `PUT /admin/categories/{slug}` |
 | carts | `POST /carts/new`, `GET /carts/{cartId}`, `PUT /carts/{cartId}/items`, `DELETE /carts/{cartId}/items/{variantId}`, `PUT /carts/{cartId}/contact`, `POST /carts/{cartId}/views` | Customer: `GET /me/cart`, `PUT /me/cart/items`, `DELETE /me/cart/items/{variantId}`, `POST /me/cart/merge`, `POST /me/views`, `GET /me/watchlist`, `PUT/DELETE /me/watchlist/{productId}` |
 | checkout | `POST /checkout/quote`, `POST /checkout/pay`, `POST /checkout/webhooks/square` | — |
 | orders | `GET /orders/lookup?token=` | Customer: `GET /me/orders`; Admin: list/filter by delivery day, update fulfillment-group status, refund |

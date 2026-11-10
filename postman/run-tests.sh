@@ -46,6 +46,6 @@ npx --yes newman@6 run "$HERE/greenlove-farms.postman_collection.json" \
   --env-var "password=$PASSWORD" \
   --env-var "adminEmail=$ADMIN_EMAIL" \
   --env-var "adminPassword=$ADMIN_PASSWORD" \
-  "${FOLDER_ARGS[@]}" \
+  ${FOLDER_ARGS[@]+"${FOLDER_ARGS[@]}"} \
   --reporters cli,junit \
   --reporter-junit-export "$HERE/reports/$ENV_NAME-$(date +%Y%m%d-%H%M%S).xml"

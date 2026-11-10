@@ -17,6 +17,13 @@ try {
     { key: { 'variants.sku': 1 }, name: 'variant_sku_unique', unique: true, sparse: true },
   ]);
   console.log(`Indexes ensured on ${MONGODB_DB_NAME}.products`);
+
+  const categories = client.db(MONGODB_DB_NAME).collection('categories');
+  await categories.createIndexes([
+    { key: { slug: 1 }, name: 'slug_unique', unique: true },
+    { key: { status: 1, sortOrder: 1, name: 1 }, name: 'status_sort_name' },
+  ]);
+  console.log(`Indexes ensured on ${MONGODB_DB_NAME}.categories`);
 } finally {
   await client.close();
 }

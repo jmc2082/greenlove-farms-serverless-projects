@@ -41,7 +41,12 @@ export const handler = async (
 
     const result = await col.findOneAndUpdate(
       { _id: current._id, version },
-      { $set: { ...fields!, updatedAt: new Date() }, $inc: { version: 1 } },
+      {
+        $set: { ...fields!, updatedAt: new Date() },
+        $inc: { version: 1 },
+        // Sending `label: null` removes it; $set alone would leave the old one in place.
+        ...(fields!.label ? {} : { $unset: { label: '' } }),
+      },
       { returnDocument: 'after' }
     );
     if (!result) return conflict('Product was changed by someone else — reload and try again');

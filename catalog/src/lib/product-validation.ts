@@ -6,6 +6,9 @@ import {
   FulfillmentClass,
   FulfillmentMethod,
   FulfillmentProfile,
+  ProductBadge,
+  ProductLabel,
+  PRODUCT_BADGES,
   FULFILLMENT_CLASSES,
   FULFILLMENT_METHODS,
   REGULATORY_CLASSES,
@@ -14,13 +17,18 @@ import {
   ProductStatus,
 } from '@greenlove/shared';
 
-export type ProductFields = Omit<Product, '_id' | 'version' | 'squareItemId' | 'createdAt' | 'updatedAt'>;
+export type ProductFields = Omit<Product, '_id' | 'version' | 'createdAt' | 'updatedAt'>;
 
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SKU = /^[A-Z0-9][A-Z0-9-]{1,39}$/;
 const MAX_VARIANTS = 20;
 const MAX_IMAGES = 10;
 const MAX_PRICE_CENTS = 1_000_000;
+const MAX_SEARCH_TERMS = 20;
+const MAX_ALLERGENS = 20;
+
+// Regulatory classes whose label (ingredients) must be filled in before the product can be ACTIVE.
+const NEEDS_INGREDIENTS: RegulatoryClass[] = ['COSMETIC', 'COTTAGE_FOOD', 'TCS'];
 
 export const slugify = (s: string) =>
   s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
@@ -30,12 +38,26 @@ const isInt = (v: unknown, min: number, max: number): v is number =>
 
 const text = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
+// Trimmed, de-duplicated list of non-empty strings. Returns null when `v` isn't an array of strings.
+function textList(v: unknown, maxItems: number, maxLen: number, lower = false): string[] | null {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > maxItems || !v.every((x) => typeof x === 'string')) return null;
+  const out = v.map((x: string) => (lower ? x.toLowerCase() : x).trim().slice(0, maxLen)).filter(Boolean);
+  return [...new Set(out)];
+}
+
 // Inverse of validation: what an admin client sends back (variant ids as strings, inventory omitted).
 export function toEditableInput(p: Product): Record<string, unknown> {
   return {
     slug: p.slug,
     name: p.name,
     description: p.description,
+    shortDescription: p.shortDescription,
+    searchTerms: p.searchTerms,
+    label: p.label,
+    storage: p.storage,
+    featuredRank: p.featuredRank,
+    badges: p.badges,
     category: p.category,
     status: p.status,
     fulfillmentClass: p.fulfillmentClass,
@@ -49,13 +71,14 @@ export function toEditableInput(p: Product): Record<string, unknown> {
       name: v.name,
       priceCents: v.priceCents,
       weightOz: v.weightOz,
+      netWeight: v.netWeight,
     })),
   };
 }
 
 /**
- * Validates a full product payload. `existingVariants` (update only) lets variants keep their _id,
- * inventory counters and Square IDs — inventory is never set through this path except `onHand` on new variants.
+ * Validates a full product payload. `existingVariants` (update only) lets variants keep their _id and
+ * inventory counters — inventory is never set through this path except `onHand` on new variants.
  */
 export function validateProduct(
   raw: Record<string, unknown>,
@@ -71,6 +94,19 @@ export function validateProduct(
   if (!SLUG.test(slug)) errors['slug'] = 'lowercase letters, numbers and single hyphens';
 
   const description = text(raw['description'], 5000);
+  const shortDescription = text(raw['shortDescription'], 160);
+  const storage = text(raw['storage'], 1000);
+
+  const searchTerms = textList(raw['searchTerms'], MAX_SEARCH_TERMS, 40, true);
+  if (!searchTerms) errors['searchTerms'] = `array of at most ${MAX_SEARCH_TERMS} strings`;
+
+  const badges = textList(raw['badges'], PRODUCT_BADGES.length, 20) as ProductBadge[] | null;
+  if (!badges || !badges.every((b) => PRODUCT_BADGES.includes(b))) {
+    errors['badges'] = `array of ${PRODUCT_BADGES.join(', ')}`;
+  }
+
+  const featuredRank = raw['featuredRank'] ?? 0;
+  if (!isInt(featuredRank, 0, 1000)) errors['featuredRank'] = 'integer 0-1000 (higher shows first, 0 = not featured)';
 
   const category = text(raw['category'], 60);
   if (!category) errors['category'] = 'required';
@@ -93,6 +129,28 @@ export function validateProduct(
 
   const taxCategory = text(raw['taxCategory'], 40);
   if (!taxCategory) errors['taxCategory'] = 'required';
+
+  // ── Label ──
+  let label: ProductLabel | undefined;
+  if (raw['label'] !== undefined && raw['label'] !== null) {
+    const rl = raw['label'] as Record<string, unknown>;
+    const allergens = typeof rl === 'object' ? textList(rl['allergens'], MAX_ALLERGENS, 60) : null;
+    if (typeof rl !== 'object' || Array.isArray(rl) || !allergens) {
+      errors['label'] = `{ ingredients, allergens: string[] (at most ${MAX_ALLERGENS}), statement? }`;
+    } else {
+      const statement = text(rl['statement'], 500);
+      label = { ingredients: text(rl['ingredients'], 3000), allergens, ...(statement ? { statement } : {}) };
+    }
+  }
+  if (status === 'ACTIVE' && !errors['label']) {
+    // Customers must be able to read the label before paying, so a sellable product needs one.
+    if (NEEDS_INGREDIENTS.includes(regulatoryClass) && !label?.ingredients) {
+      errors['label.ingredients'] = `required before a ${regulatoryClass} product can be ACTIVE`;
+    }
+    if (regulatoryClass === 'COTTAGE_FOOD' && !label?.statement) {
+      errors['label.statement'] = 'the cottage-food statement is required before a COTTAGE_FOOD product can be ACTIVE';
+    }
+  }
 
   // ── Fulfillment profile ──
   const fp = (raw['fulfillmentProfile'] ?? {}) as Record<string, unknown>;
@@ -151,6 +209,7 @@ export function validateProduct(
       const vName = text(rv?.['name'], 80);
       const priceCents = rv?.['priceCents'];
       const weightOz = rv?.['weightOz'];
+      const netWeight = text(rv?.['netWeight'], 40);
       const id = rv?.['id'];
 
       if (!SKU.test(sku)) errors[`${at}.sku`] = 'A-Z, 0-9 and hyphens, 2-40 characters';
@@ -185,8 +244,8 @@ export function validateProduct(
         name: vName,
         priceCents: priceCents as number,
         ...(typeof weightOz === 'number' ? { weightOz } : {}),
+        ...(netWeight ? { netWeight } : {}),
         ...(inventory ? { inventory } : {}),
-        ...(existing?.squareVariationId ? { squareVariationId: existing.squareVariationId } : {}),
       });
     }
 
@@ -205,6 +264,12 @@ export function validateProduct(
       slug,
       name,
       description,
+      shortDescription,
+      searchTerms: searchTerms!,
+      ...(label ? { label } : {}),
+      storage,
+      featuredRank: featuredRank as number,
+      badges: badges!,
       category,
       status,
       fulfillmentClass,

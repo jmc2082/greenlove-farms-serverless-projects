@@ -61,6 +61,11 @@ const testProduct = (status, variant) => ({
   name: 'Postman Test Soap {{runId}}',
   slug: 'postman-test-{{runId}}',
   description: 'Created by the automated Postman run. Safe to delete.',
+  shortDescription: 'Postman test product.',
+  searchTerms: ['postman', 'test bar'],
+  label: { ingredients: 'Saponified olive oil, water', allergens: [] },
+  storage: 'Keep dry.',
+  badges: ['NEW'],
   category: 'postman-test',
   status,
   fulfillmentClass: 'STOCKED',
@@ -70,8 +75,9 @@ const testProduct = (status, variant) => ({
   images: [],
   variants: [variant],
 });
-const newVariant = { sku: 'PM-{{runId}}', name: '4 oz bar', priceCents: 800, weightOz: 4, onHand: 25 };
-const keptVariant = (priceCents) => ({ id: '{{variantId}}', sku: 'PM-{{runId}}', name: '4 oz bar', priceCents, weightOz: 4 });
+const newVariant = { sku: 'PM-{{runId}}', name: '4 oz bar', priceCents: 800, weightOz: 4, netWeight: '4 oz (113 g)', onHand: 25 };
+const keptVariant = (priceCents) => ({ id: '{{variantId}}', sku: 'PM-{{runId}}', name: '4 oz bar', priceCents, weightOz: 4, netWeight: '4 oz (113 g)' });
+const testCategory = (status) => ({ name: 'Postman Test', blurb: 'Created by the automated Postman run.', sortOrder: 999, status });
 
 const saveAdminProduct = [
   'const p = pm.response.json();',
@@ -220,6 +226,12 @@ const catalog = folder('Catalog', [
       body: { name: '', variants: [] },
       tests: [status(400), errorBody],
     }),
+    req('Create product (active without label)', 'POST', '/catalog/admin/products', {
+      pre: NEEDS_ADMIN,
+      body: { ...testProduct('ACTIVE', { ...newVariant, sku: 'PM-NOLABEL-{{runId}}' }), slug: 'postman-nolabel-{{runId}}', label: null },
+      description: 'COSMETIC, COTTAGE_FOOD and TCS products need label.ingredients before they can be ACTIVE.',
+      tests: [status(400), "pm.test('label error', () => pm.expect(pm.response.json().details).to.have.property('label.ingredients'));"],
+    }),
     req('Get product', 'GET', '/catalog/admin/products/{{productId}}', {
       pre: NEEDS_TEST_PRODUCT,
       tests: [status(200), "pm.test('same product', () => pm.expect(pm.response.json().id).to.eql(pm.environment.get('productId')));"],
@@ -245,6 +257,21 @@ const catalog = folder('Catalog', [
       pre: NEEDS_TEST_PRODUCT,
       body: { variantId: '{{variantId}}', delta: -100000, reason: 'COUNT_CORRECTION' },
       tests: [status(409), errorBody],
+    }),
+    req('Save category', 'PUT', '/catalog/admin/categories/postman-test', {
+      pre: NEEDS_ADMIN,
+      body: testCategory('ACTIVE'),
+      description: 'Creates or replaces the category with this slug. Set status HIDDEN to retire it.',
+      tests: [status(200), "pm.test('saved', () => pm.expect(pm.response.json().slug).to.eql('postman-test'));", set('testCategoryCreated', "'true'")],
+    }),
+    req('Save category (invalid)', 'PUT', '/catalog/admin/categories/Bad_Slug', {
+      pre: NEEDS_ADMIN,
+      body: testCategory('ACTIVE'),
+      tests: [status(400), errorBody],
+    }),
+    req('List categories', 'GET', '/catalog/admin/categories', {
+      pre: NEEDS_ADMIN,
+      tests: [status(200), "pm.test('list', () => pm.expect(pm.response.json().items).to.be.an('array'));"],
     }),
     req('Sign image upload', 'POST', '/catalog/admin/images/sign', {
       pre: NEEDS_ADMIN,
@@ -285,6 +312,15 @@ const catalog = folder('Catalog', [
     ],
   }),
   req('Get product by slug (missing)', 'GET', '/catalog/products/no-such-product-postman', { auth: NOAUTH, tests: [status(404)] }),
+  req('List categories', 'GET', '/catalog/categories', {
+    auth: NOAUTH,
+    tests: [
+      status(200),
+      'const r = pm.response.json();',
+      "pm.test('list', () => pm.expect(r.items).to.be.an('array'));",
+      "if (pm.environment.get('testCategoryCreated')) pm.test('test category counts its product', () => { const c = r.items.find((i) => i.slug === 'postman-test'); pm.expect(c && c.productCount).to.be.at.least(pm.environment.get('testProductCreated') ? 1 : 0); });",
+    ],
+  }),
 ]);
 
 // ── Carts ──
@@ -366,7 +402,13 @@ const teardown = folder('Teardown', [
     body: { version: num('productVersion'), ...testProduct('ARCHIVED', keptVariant(900)) },
     tests: [status(200), "pm.test('archived', () => pm.expect(pm.response.json().status).to.eql('ARCHIVED'));", "pm.environment.unset('testProductCreated');"],
   }),
-], { description: 'Archives the product created in Catalog → Admin so it leaves the storefront.' });
+  req('Hide test category', 'PUT', '/catalog/admin/categories/postman-test', {
+    auth: ADMIN,
+    pre: "if (!pm.variables.get('testCategoryCreated')) pm.execution.skipRequest();",
+    body: testCategory('HIDDEN'),
+    tests: [status(200), "pm.environment.unset('testCategoryCreated');"],
+  }),
+], { description: 'Archives the product and hides the category created in Catalog → Admin so they leave the storefront.' });
 
 // Refuse to write to prod during automated runs; reads are fine.
 const prodGuard = [

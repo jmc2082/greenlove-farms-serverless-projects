@@ -158,6 +158,35 @@ Resources:
         EntryPoints: [handlers/products/get.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
 
+  # ── Categories (public) ───────────────────────────────────────────────────────
+  ListCategoriesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-list-categories"
+      CodeUri: src/
+      Handler: handlers/categories/list.handler
+      Description: List visible categories with their active product counts
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /categories
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/categories/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
   # ── Admin (Staff / Admins) ────────────────────────────────────────────────────
   AdminListProductsFunction:
     Type: AWS::Serverless::Function
@@ -316,6 +345,58 @@ Resources:
         Target: es2022
         Sourcemap: true
         EntryPoints: [handlers/admin/images/sign.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminListCategoriesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-list-categories"
+      CodeUri: src/
+      Handler: handlers/admin/categories/list.handler
+      Description: List all categories incl. hidden
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/categories
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/categories/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminPutCategoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-put-category"
+      CodeUri: src/
+      Handler: handlers/admin/categories/put.handler
+      Description: Create or replace a category by slug
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /admin/categories/{slug}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/categories/put.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
 
 Outputs:
