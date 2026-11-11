@@ -66,6 +66,7 @@ Each environment's user can open only its own database, so a dev test can never 
 | 2026-11-09 | Deployed `catalog` and `carts` to prod. Added `scripts/with-db.sh`. `deploy.sh` now accepts `AWS_PROFILE`. |
 | 2026-11-10 | On dev: recently viewed (guest views carry over at login) and saved addresses with ids and a default. Addresses saved earlier get ids the first time they're read. |
 | 2026-11-10 | Catalog on dev: search (Atlas Search, with typo tolerance and synonyms), suggestions, sorting (featured, newest, price), price / delivery-method / in-stock filters, and availability on every product. The shared database connection no longer uses MongoDB's strict API mode, which blocks Atlas Search. Made the first prod admin. |
+| 2026-11-11 | Deployed saved cards and Stripe-Dashboard refunds to prod (`shared-infra`, `checkout`, `orders`). The prod Stripe webhook isn't registered yet, so neither is active on prod until live Stripe is set up. |
 | 2026-11-11 | Saved cards on dev (decided: at launch). Signed-in shoppers get a Stripe Customer on first use; `POST /checkout/me/customer-session` returns the CustomerSession secret so the Payment Element shows saved cards, a "Save this card" box (for paying while present only) and a remove option; `/checkout/me/pay` attaches the payment to that Customer; the account page can list and remove cards (`/checkout/me/payment-methods`). Postman: 526 checks, all passing. |
 | 2026-11-11 | Refunds made in the Stripe Dashboard are now recorded on dev: the checkout webhook takes `refund.created` and hands refunds that didn't come from the staff endpoint to the orders stack (`StripeRefundCreated` event), which reverses the tax, updates the order and sends the refund email. Staff refunds are tagged `source=admin` so they're never recorded twice; tax reversals are keyed by refund id. Sandbox webhook now also sends `refund.created`. |
 | 2026-11-11 | Deployed the order emails to prod (`shared-infra`, `checkout`, `orders` updated; `notifications` created). Prod event rule matches only `prod` events; emails link to https://www.greenlove-farms.com. |
@@ -104,7 +105,7 @@ Backend items, roughly in order. The full list with details is in the frontend's
 | Carts, merge on login, views, watchlist | carts | ✅ |
 | Remove the Square fields from products | catalog | ✅ dev and prod |
 | Order payment info (`orders.payment`: PaymentIntent, card brand and last 4) | checkout | ✅ dev and prod |
-| Saved cards at launch: `customers.stripeCustomerId`, `POST /checkout/me/customer-session` for the Payment Element, `GET/DELETE /checkout/me/payment-methods` | checkout | 🟡 on dev, not prod yet |
+| Saved cards at launch: `customers.stripeCustomerId`, `POST /checkout/me/customer-session` for the Payment Element, `GET/DELETE /checkout/me/payment-methods` | checkout | ✅ dev and prod |
 | New product fields: `searchTerms`, `shortDescription`, `label` (ingredients, allergens, statement), `storage`, `featuredRank`, `badges`; `netWeight` on each size | catalog | ✅ dev and prod |
 | `GET /categories`, plus staff `GET /admin/categories` and `PUT /admin/categories/{slug}` | catalog | ✅ dev and prod |
 | Product filters and sort: `q` (Atlas Search), `sort`, price range, delivery methods, `inStock` | catalog | ✅ dev and prod |
@@ -119,7 +120,7 @@ Backend items, roughly in order. The full list with details is in the frontend's
 | Checkout settings to confirm: shipping rate (placeholder $7.95 flat), delivery-area ZIPs (placeholder: starts with 770, 773 or 774), farm pickup addresses (placeholder ZIPs 77070 and 77301), Stripe tax code per `taxCategory` (all "general" for now). Change them in the `settings` document `{ _id: 'checkout' }`; defaults are in `checkout/src/lib/settings.ts`. | data | ⬜ |
 | **Promo codes:** collections, admin create/edit/pause, redemptions, `POST /promotions/check`, applied in the quote | promotions (new), checkout | ✅ dev and prod |
 | **Orders:** `/orders/me`, guest tracking link and lookup, staff list, status changes, refunds | orders (new) | ✅ dev and prod |
-| Refunds made in the Stripe Dashboard: recorded on the order with tax reversal and refund email (no restock) | checkout webhook, orders | 🟡 on dev, not prod yet |
+| Refunds made in the Stripe Dashboard: recorded on the order with tax reversal and refund email (no restock) | checkout webhook, orders | ✅ dev and prod |
 | **Emails:** order confirmation (with the guest tracking link), status updates (shipped, ready for pickup, out for delivery, cancelled), refund notices | notifications (new) | ✅ dev and prod |
 | Classify every product's `regulatoryClass` | data | ⬜ |
 
