@@ -70,7 +70,8 @@ greenlove-farms-serverless-projects/
                     signing (product images only in Phase 1, so no separate images stack)
   carts/            server-side carts, product views, watchlist
   checkout/         quote engine, stock holds, Stripe PaymentIntents and Tax, order creation (Stripe webhook)
-  orders/           order + fulfillment-group reads and admin status changes, guest lookup
+  promotions/       promo codes: staff create/edit/pause, redemption history, the cart's quick code check
+  orders/           order history, guest tracking links and lookup email, staff list, status changes, refunds
   notifications/    SES templates, transactional sends, abandoned-cart sweep
 ```
 
@@ -155,7 +156,7 @@ Created only by the `payment_intent.succeeded` webhook, so every order is paid. 
   contact: { fullName, email, phone },
   status: 'PAID' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED' | 'REFUNDED' | 'PARTIALLY_REFUNDED',
   totals: { subtotalCents, discountCents, deliveryCents, shippingCents, taxCents, totalCents },
-  promoCode?,
+  promotion?: { promotionId, code, discountCents, feeDiscountCents },
   payment: { provider: 'STRIPE', paymentIntentId (unique), status, amountCents, currency, method?: { type, brand, last4 }, refundedCents },
   tax: { calculationIds, transactionIds },          // Stripe Tax; transactions are what filing reports use
   fulfillmentGroups: [{
@@ -171,6 +172,38 @@ Created only by the `payment_intent.succeeded` webhook, so every order is paid. 
 ```
 Guests get a `customers` record keyed by email (`cognitoSub: null`), so signing up later with that email links the orders.
 `inventory.short` flags an order paid after its hold expired when stock ran out meanwhile, for staff to review.
+
+**After the order** (`orders` stack). `{ref}` is the order number or id.
+- *Status:* each group follows its method's path: ship `PREPARING → SHIPPED → DELIVERED`; local delivery
+  `SCHEDULED → PREPARING → READY → OUT_FOR_DELIVERY → DELIVERED`; pickup `SCHEDULED → PREPARING → READY → PICKED_UP`;
+  any unfinished group can be `CANCELLED`. Staff move forward only (skipping steps is fine); Admins can also correct
+  backwards. Each change is appended to `statusHistory` with who made it. The order's `status` follows its groups
+  (`PAID → PARTIALLY_FULFILLED → FULFILLED`, or `CANCELLED`), and becomes `REFUNDED` once fully refunded.
+- *Refunds:* `stripe.refunds.create` (whole remainder by default), then a Stripe Tax reversal per tax transaction
+  (full, or the same share for a partial refund), optional restock (logged in `inventoryAdjustments` as
+  `REFUND_RESTOCK`), and a `refunds[]` entry. Idempotency keys are tied to the order's refunded total so a
+  double-click can't refund twice. Refunds made in the Stripe Dashboard aren't picked up yet.
+- *Guest links:* a random 32-byte token, stored only as its sha256 in `guestAccessTokenHash`; a new link replaces
+  the old one. `POST /orders/lookup` answers 202 either way and only emails the link to the order's address.
+- *Email:* `sendEmail` and `emailLayout` in the shared layer send through SES with the transactional configuration
+  set; links use the stack's `WebUrl` (`http://localhost:3000` on dev, `https://www.greenlove-farms.com` on prod).
+
+### `promotions` and `promotionRedemptions`
+```ts
+{ _id, code: 'SPRING10' (uppercase, unique), description,             // description is staff-facing
+  type: 'PERCENT' | 'FIXED' | 'FREE_DELIVERY' | 'FREE_SHIPPING', value, // percent 1–100 or cents
+  appliesTo: { scope: 'ORDER' | 'CATEGORIES' | 'PRODUCTS' | 'FULFILLMENT_CLASSES', ids },
+  minSubtotalCents, maxDiscountCents, startsAt, endsAt, usageLimit, perCustomerLimit, firstOrderOnly,
+  status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED', redemptionCount, version, createdBy, updatedBy, createdAt, updatedAt }
+// promotionRedemptions: { promotionId, code, orderId, orderNumber, customerId, email, discountCents, feeDiscountCents, createdAt }
+```
+One code per order. The quote applies it (shared `evaluatePromotion`): status, dates, minimum (order subtotal before
+discounts), scope, total and per-customer limits (per account, or per email for guests), first-order-only. Percent and
+fixed discounts are split across eligible items by line total (exact to the cent) and applied **before tax**; free
+delivery / free shipping waive that fee. A code that doesn't apply comes back with its reason and doesn't block payment.
+`/pay` re-checks everything; the webhook records the redemption (unique per order) and increments `redemptionCount`,
+so a failed payment never uses up a code. Two checkouts paying at the same moment can both pass a nearly used-up
+`usageLimit`; acceptable at our volume. A code can't be renamed after it has been used.
 
 ### Supporting
 - `counters` — `{ _id: 'order-2026', seq }` via `findOneAndUpdate` + `$inc`.
@@ -202,8 +235,9 @@ Each route exists for guests (`/checkout/...`, `cartId` in the body) and signed-
 |---|---|---|
 | catalog | `GET /products` (`q`, `sort`, `category`, `fulfillmentClass`, `methods`, `minPrice`/`maxPrice` in cents, `inStock`, `page`, `limit`), `GET /products/suggest?q=`, `GET /products/{slug}`, `GET /categories` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`, `GET /admin/categories`, `PUT /admin/categories/{slug}` |
 | carts | `POST /carts/new`, `GET /carts/{cartId}`, `PUT /carts/{cartId}/items`, `DELETE /carts/{cartId}/items/{variantId}`, `PUT /carts/{cartId}/contact`, `POST/GET /carts/{cartId}/views` | Customer: `GET /me/cart`, `PUT /me/cart/items`, `DELETE /me/cart/items/{variantId}`, `POST /me/cart/merge` (also moves guest views), `POST/GET /me/views`, `GET /me/watchlist`, `PUT/DELETE /me/watchlist/{productId}` |
-| checkout | `POST /checkout/quote`, `POST /checkout/pay`, `GET /checkout/status`, `POST /checkout/webhooks/stripe` | Customer: `POST /checkout/me/quote`, `POST /checkout/me/pay` |
-| orders | `GET /orders/lookup?token=` | Customer: `GET /me/orders`; Admin: list/filter by delivery day, update fulfillment-group status, refund |
+| checkout | `POST /checkout/quote` (`promoCode` optional), `POST /checkout/pay`, `GET /checkout/status`, `POST /checkout/webhooks/stripe` | Customer: `POST /checkout/me/quote`, `POST /checkout/me/pay` |
+| promotions | `POST /promotions/check` (throttled) | Staff: `GET/POST /promotions/admin` (`state`, `q`), `GET/PUT /promotions/admin/{id}` (PUT needs `version`; pause/resume/archive via `status`), `GET /promotions/admin/{id}/redemptions` |
+| orders | `GET /orders/track?token=`, `POST /orders/lookup` (both throttled) | Customer: `GET /orders/me`, `GET /orders/me/{ref}`; Staff: `GET /orders/admin` (`deliveryDate`, `method`, `groupStatus`, `status`, `q`, `inventoryShort`), `GET /orders/admin/{ref}`, `PUT /orders/admin/{ref}/groups/{groupId}`, `POST /orders/admin/{ref}/refunds` |
 | auth | `POST /signup`, `/confirm-signup`, `/resend-code`, `/login`, `/refresh`, `/forgot-password`, `/confirm-password` | Customer: `GET/PUT /me`, `GET/POST /me/addresses`, `PUT/DELETE /me/addresses/{id}`; Admin: `POST /admin/users/role` |
 | notifications | — | internal only (invoked by other stacks / scheduler) |
 

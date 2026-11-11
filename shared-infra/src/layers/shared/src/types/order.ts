@@ -44,7 +44,7 @@ export interface OrderItem {
   unitPriceCents: number;
   discountCents: number;
   taxCents: number;
-  lineTotalCents: number; // qty × unitPrice − discount, before tax
+  lineTotalCents: number; // qty × unitPrice, before discount and tax
 }
 
 export interface FulfillmentGroup {
@@ -64,6 +64,17 @@ export interface FulfillmentGroup {
   statusHistory: { status: FulfillmentGroupStatus; at: Date; by?: string }[];
 }
 
+export interface OrderRefund {
+  refundId: string;   // Stripe refund id
+  amountCents: number;
+  reason: 'requested_by_customer' | 'duplicate' | 'fraudulent';
+  note: string;       // staff note
+  restocked: { variantId: ObjectId; qty: number }[];
+  taxReversalIds: string[];
+  by: { sub: string; email: string };
+  at: Date;
+}
+
 /**
  * One cart → one payment → one order → many fulfillment groups. Created by the Stripe webhook once the
  * payment succeeds, so every order here has been paid. customerId is set for signed-in shoppers and for
@@ -77,7 +88,7 @@ export interface Order {
   contact: { fullName: string; email: string; phone: string };
   status: OrderStatus;
   totals: OrderTotals;
-  promoCode?: string;
+  promotion?: { promotionId: ObjectId; code: string; discountCents: number; feeDiscountCents: number };
   payment: {
     provider: 'STRIPE';
     paymentIntentId: string;
@@ -95,6 +106,7 @@ export interface Order {
   // Stock leaves inventory once per order (committedAt). short: paid after its hold expired and stock ran
   // out in the meantime, so staff should review.
   inventory: { committedAt: Date | null; short: boolean };
+  refunds?: OrderRefund[];
   guestAccessTokenHash: string | null; // sha256 of the tracking-link token, set when the link is emailed
   notifications: { confirmationSentAt: Date | null };
   createdAt: Date;

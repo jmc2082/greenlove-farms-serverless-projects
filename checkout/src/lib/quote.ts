@@ -3,6 +3,7 @@ import { Db, ObjectId } from 'mongodb';
 import {
   Cart, Customer, FulfillmentClass, FulfillmentMethod, FULFILLMENT_METHODS, PICKUP_LOCATION_IDS, PickupLocationId,
   PostalAddress, Product, ProductImage, availableUnits, upcomingLocalDeliveries,
+  Order, Promotion, PromotionRedemption, PromoLine, PROMO_CODE_PATTERN, evaluatePromotion, normalizePromoCode, promotionSummary,
 } from '@greenlove/shared';
 import { CheckoutSettings, PickupLocation, inDeliveryArea, taxCodeFor } from './settings';
 import { FieldErrors, parseAddress, parseContact } from './input';
@@ -23,6 +24,7 @@ export interface QuoteInputs {
   address: PostalAddress | null;
   savedAddressId: string | null;
   selections: GroupSelection[];
+  promoCode: string | null;
 }
 
 export interface QuoteItem {
@@ -62,11 +64,21 @@ export interface QuoteIssue {
     | 'CART_EMPTY' | 'ITEM_UNAVAILABLE' | 'NOT_ENOUGH_STOCK' | 'NOT_SOLD_ONLINE_YET'
     | 'METHOD_REQUIRED' | 'NO_COMMON_METHOD' | 'PICKUP_LOCATION_REQUIRED' | 'ADDRESS_REQUIRED'
     | 'OUTSIDE_DELIVERY_AREA' | 'SHIPPING_NOT_AVAILABLE' | 'DELIVERY_DATE_UNAVAILABLE'
-    | 'CONTACT_REQUIRED' | 'TAX_UNAVAILABLE';
+    | 'CONTACT_REQUIRED' | 'TAX_UNAVAILABLE' | 'TOTAL_TOO_LOW';
   message: string;
   groupKey?: string;
   variantId?: string;
   available?: number;
+}
+
+export interface QuotePromotion {
+  promotionId: ObjectId | null;
+  code: string;
+  applied: boolean;
+  message: string | null; // why it doesn't apply
+  summary: string | null; // e.g. "10% off, orders over $40"
+  discountCents: number;    // off items
+  feeDiscountCents: number; // delivery or shipping waived
 }
 
 export interface TaxCalc {
@@ -97,6 +109,9 @@ export interface CheckoutQuote {
     totalCents: number | null; // null while tax is unknown
   };
   issues: QuoteIssue[];
+  // The code the shopper entered and what it did. A code that doesn't apply doesn't block payment;
+  // the reason is shown under the code field.
+  promotion: QuotePromotion | null;
   payable: boolean;
   requiresLabelAck: boolean; // cottage-food or TCS items: shopper must confirm they've read the labels
   tax: TaxCalc[];
@@ -151,7 +166,12 @@ export function parseQuoteInputs(raw: Record<string, unknown>, errors: FieldErro
       selections.push(sel);
     });
   }
-  return { contact, address, savedAddressId, selections };
+  let promoCode: string | null = null;
+  if (raw['promoCode'] !== undefined && raw['promoCode'] !== null && raw['promoCode'] !== '') {
+    promoCode = typeof raw['promoCode'] === 'string' ? normalizePromoCode(raw['promoCode']) : '';
+    if (!PROMO_CODE_PATTERN.test(promoCode)) errors['promoCode'] = 'Enter a valid code';
+  }
+  return { contact, address, savedAddressId, selections, promoCode };
 }
 
 // ── Building the quote ────────────────────────────────────────────────────────
@@ -183,6 +203,7 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
 
   // Lines → groups by fulfillment class.
   const groupLines = new Map<FulfillmentClass, { product: Product; item: QuoteItem }[]>();
+  const promoLines: PromoLine[] = [];
   let requiresLabelAck = false;
   for (const line of cart.items) {
     const product = byId.get(line.productId.toHexString());
@@ -224,6 +245,7 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     };
     const list = groupLines.get(product.fulfillmentClass) ?? [];
     list.push({ product, item });
+    promoLines.push({ variantId: variant._id, productId: product._id, category: product.category, fulfillmentClass: product.fulfillmentClass, lineTotalCents: lineTotal });
     groupLines.set(product.fulfillmentClass, list);
   }
   if (cart.items.length === 0) issues.push({ code: 'CART_EMPTY', message: 'Your cart is empty.' });
@@ -293,17 +315,6 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     }
   }
 
-  // Fees: local delivery is free once local items reach the threshold (charged once, on the first local
-  // group); shipping is a flat rate per shipped group.
-  const discountCents = 0;
-  const localGroups = groups.filter((g) => g.method === 'LOCAL_DELIVERY');
-  const localSubtotal = localGroups.reduce((s, g) => s + g.subtotalCents, 0);
-  if (localGroups.length > 0 && localSubtotal < settings.localDelivery.freeFromCents) localGroups[0].feeCents = settings.localDelivery.feeCents;
-  for (const g of groups.filter((x) => x.method === 'SHIP')) {
-    const free = settings.shipping.freeFromCents !== null && g.subtotalCents >= settings.shipping.freeFromCents;
-    g.feeCents = free ? 0 : settings.shipping.flatCents;
-  }
-
   // Contact: signed-in shoppers use their verified account email; guests type theirs (or set it on the cart).
   let contact = inputs.contact;
   if (customer) {
@@ -316,6 +327,29 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     contact = { email: cart.contact.email, fullName: '', phone: '' };
   }
   if (!contact?.email || !contact.fullName) issues.push({ code: 'CONTACT_REQUIRED', message: 'Enter your name and email.' });
+
+  // Promo code: applied before fees (free-delivery threshold uses the discounted subtotal) and before tax.
+  const promotion = inputs.promoCode
+    ? await applyPromotion(db, inputs.promoCode, promoLines, groups, customer?._id ?? null, contact?.email || null, now)
+    : null;
+  const discountCents = groups.reduce((s, g) => s + g.items.reduce((t, i) => t + i.discountCents, 0), 0);
+  const afterDiscount = (g: QuoteGroup) => g.subtotalCents - g.items.reduce((t, i) => t + i.discountCents, 0);
+
+  // Fees: local delivery is free once local items reach the threshold (charged once, on the first local
+  // group); shipping is a flat rate per shipped group. A free-delivery or free-shipping code waives them.
+  const localGroups = groups.filter((g) => g.method === 'LOCAL_DELIVERY');
+  const localSubtotal = localGroups.reduce((s, g) => s + afterDiscount(g), 0);
+  if (localGroups.length > 0 && localSubtotal < settings.localDelivery.freeFromCents) localGroups[0].feeCents = settings.localDelivery.feeCents;
+  for (const g of groups.filter((x) => x.method === 'SHIP')) {
+    const free = settings.shipping.freeFromCents !== null && afterDiscount(g) >= settings.shipping.freeFromCents;
+    g.feeCents = free ? 0 : settings.shipping.flatCents;
+  }
+  if (promotion?.applied && promotion.waive) {
+    for (const g of groups.filter((x) => x.method === promotion.waive)) {
+      promotion.view.feeDiscountCents += g.feeCents;
+      g.feeCents = 0;
+    }
+  }
 
   // Tax, once every group knows where the sale happens.
   const taxable = groups.length > 0 && groups.every((g) => g.method && (g.pickupLocation || g.address));
@@ -345,10 +379,16 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     totalCents: taxCents === null ? null : subtotalCents - discountCents + deliveryCents + shippingCents + taxCents,
   };
 
+  // Stripe's minimum charge is $0.50 (a large fixed discount could go below it).
+  if (totals.totalCents !== null && totals.totalCents < 50) {
+    issues.push({ code: 'TOTAL_TOO_LOW', message: 'Orders must be at least $0.50 after discounts.' });
+  }
+
   // Empty fields are dropped: a saved quote reads back unset fields as null, and that must not count as a change.
   const fingerprint = sha256(JSON.stringify({
     contact,
     totals,
+    promo: promotion ? [promotion.view.code, promotion.applied, promotion.view.feeDiscountCents] : null,
     groups: groups.map((g) => [g.key, g.method, g.pickupLocation?.id, g.address, g.deliveryDate, g.feeCents, g.taxCents,
       g.items.map((i) => [i.variantId.toHexString(), i.qty, i.unitPriceCents, i.discountCents, i.taxCents])]),
   }, (_key, value) => (value === null || value === undefined || value === '' ? undefined : value)));
@@ -364,7 +404,8 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     groups,
     totals,
     issues,
-    payable: issues.length === 0 && totals.totalCents !== null && totals.totalCents > 0,
+    promotion: promotion?.view ?? null,
+    payable: issues.length === 0 && totals.totalCents !== null,
     requiresLabelAck,
     tax,
     fingerprint,
@@ -379,6 +420,59 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     createdAt: now,
     updatedAt: now,
     expiresAt: new Date(now.getTime() + DAY_MS),
+  };
+}
+
+// ── Promo codes ───────────────────────────────────────────────────────────────
+
+/**
+ * Looks up the code and the shopper's history with it, applies it to the items (setting each item's
+ * discountCents), and says which fee to waive. Per-customer and first-order limits use the account when
+ * signed in, otherwise the email (checked once the guest has entered one).
+ */
+async function applyPromotion(
+  db: Db,
+  code: string,
+  lines: PromoLine[],
+  groups: QuoteGroup[],
+  customerId: ObjectId | null,
+  email: string | null,
+  now: Date
+): Promise<{ applied: boolean; waive: 'LOCAL_DELIVERY' | 'SHIP' | null; view: QuotePromotion }> {
+  const notApplied = (message: string, p?: Promotion) => ({
+    applied: false,
+    waive: null,
+    view: { promotionId: p?._id ?? null, code, applied: false, message, summary: p ? promotionSummary(p) : null, discountCents: 0, feeDiscountCents: 0 },
+  });
+
+  const promo = await db.collection<Promotion>('promotions').findOne({ code });
+  if (!promo) return notApplied('This code isn’t valid.');
+
+  const who = customerId ? { customerId } : email ? { email } : null;
+  const [customerRedemptions, customerOrders] = who
+    ? await Promise.all([
+        db.collection<PromotionRedemption>('promotionRedemptions').countDocuments({ promotionId: promo._id, ...who }),
+        promo.firstOrderOnly
+          ? db.collection<Order>('orders').countDocuments(customerId ? { customerId } : { 'contact.email': email! })
+          : Promise.resolve(0),
+      ])
+    : [null, null];
+
+  const result = evaluatePromotion(
+    promo,
+    lines,
+    { local: groups.some((g) => g.method === 'LOCAL_DELIVERY'), ship: groups.some((g) => g.method === 'SHIP') },
+    { customerRedemptions, customerOrders },
+    now
+  );
+  if (!result.applied) return notApplied(result.reason, promo);
+
+  for (const g of groups) for (const i of g.items) i.discountCents = result.lineDiscounts.get(i.variantId.toHexString()) ?? 0;
+  const discountCents = [...result.lineDiscounts.values()].reduce((s, c) => s + c, 0);
+  return {
+    applied: true,
+    waive: result.waive,
+    view: { promotionId: promo._id, code, applied: true, message: null, summary: promotionSummary(promo), discountCents, feeDiscountCents: 0 },
   };
 }
 
@@ -442,7 +536,9 @@ async function calculateTax(db: Db, cartId: string, groups: QuoteGroup[], now: D
 // ── Public view ───────────────────────────────────────────────────────────────
 
 export function toQuoteView(q: CheckoutQuote, settings: CheckoutSettings) {
-  const localSubtotal = q.groups.filter((g) => g.method === 'LOCAL_DELIVERY').reduce((s, g) => s + g.subtotalCents, 0);
+  const localSubtotal = q.groups
+    .filter((g) => g.method === 'LOCAL_DELIVERY')
+    .reduce((s, g) => s + g.subtotalCents - g.items.reduce((t, i) => t + i.discountCents, 0), 0);
   return {
     quoteId: q._id,
     payable: q.payable,
@@ -479,6 +575,17 @@ export function toQuoteView(q: CheckoutQuote, settings: CheckoutSettings) {
       taxCents: g.taxCents,
     })),
     totals: q.totals,
+    promotion: q.promotion
+      ? {
+          code: q.promotion.code,
+          applied: q.promotion.applied,
+          message: q.promotion.message,
+          summary: q.promotion.summary,
+          discountCents: q.promotion.discountCents,
+          feeDiscountCents: q.promotion.feeDiscountCents,
+          savingsCents: q.promotion.discountCents + q.promotion.feeDiscountCents,
+        }
+      : null,
     // For the "$12 away from free local delivery" meter.
     freeDelivery: {
       thresholdCents: settings.localDelivery.freeFromCents,

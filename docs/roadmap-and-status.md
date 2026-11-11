@@ -12,7 +12,7 @@ Status key: ✅ done · 🟡 in progress · ⬜ not started
 
 - **Customer accounts work on both dev and prod.** Sign-up, email code, login, token refresh, password reset and `/me` all run on Cognito. The website was switched over to them on 2026-11-09.
 - **Catalog and carts are deployed on both environments.** The prod catalog is empty, which is expected because no products have been added yet.
-- **Checkout works on dev with Stripe test payments.** A paid checkout creates the order, takes the stock and records the sale in Stripe Tax. Orders (history, tracking, refunds), confirmation emails and promo codes are still to come, and online ordering can't open until they're done.
+- **Checkout and promo codes work on dev with Stripe test payments.** A paid checkout creates the order, takes the stock, records the sale in Stripe Tax and counts the promo code's use. Orders (history, tracking, refunds) and confirmation emails are still to come, and online ordering can't open until they're done.
 - **Sales tax is $0 for now.** Stripe Tax is set up, but no state registration exists yet, so it calculates tax and collects none. Register Texas before launch (see "Still to do outside the code"); no code change is needed when that happens.
 - **Payments moved from Square to Stripe.** [architecture.md](architecture.md) still describes Square in several places. Where the two disagree, this page and the frontend's `ecommerce-spec.md` are current.
 
@@ -26,7 +26,8 @@ Status key: ✅ done · 🟡 in progress · ⬜ not started
 | `catalog` | ✅ | ✅ (2026-11-09) | `.../catalog` |
 | `carts` | ✅ | ✅ (2026-11-09) | `.../carts` |
 | `checkout` | ✅ (2026-11-10) | ⬜ | `.../checkout` |
-| `orders` | ⬜ | ⬜ | |
+| `promotions` | ✅ (2026-11-10) | ⬜ | `.../promotions` |
+| `orders` | ✅ (2026-11-10) | ⬜ | `.../orders` |
 | `notifications` | ⬜ | ⬜ | |
 
 Prod health checks (`/auth/health`, `/catalog/health`, `/carts/health`) all return 200.
@@ -38,7 +39,7 @@ Prod health checks (`/auth/health`, `/catalog/health`, `/carts/health`) all retu
 | Database | `greenlove_dev` | `greenlove_prod` |
 | Atlas user | `greenlove_dev_user` (readWrite on `greenlove_dev` only) | `greenlove_prod_user` (readWrite on `greenlove_prod` only) |
 | Connection string | SSM `/greenlove/dev/mongodb-uri` | SSM `/greenlove/prod/mongodb-uri` |
-| Indexes | ✅ auth, catalog (incl. categories), carts, checkout | ✅ auth, catalog, carts (categories and checkout: not yet) |
+| Indexes | ✅ auth, catalog (incl. categories), carts, checkout, promotions | ✅ auth, catalog, carts (categories, checkout and promotions: not yet) |
 
 Each environment's user can open only its own database, so a dev test can never change prod data.
 
@@ -65,6 +66,8 @@ Each environment's user can open only its own database, so a dev test can never 
 | 2026-11-09 | Deployed `catalog` and `carts` to prod. Added `scripts/with-db.sh`. `deploy.sh` now accepts `AWS_PROFILE`. |
 | 2026-11-10 | On dev: recently viewed (guest views carry over at login) and saved addresses with ids and a default. Addresses saved earlier get ids the first time they're read. |
 | 2026-11-10 | Catalog on dev: search (Atlas Search, with typo tolerance and synonyms), suggestions, sorting (featured, newest, price), price / delivery-method / in-stock filters, and availability on every product. The shared database connection no longer uses MongoDB's strict API mode, which blocks Atlas Search. Made the first prod admin. |
+| 2026-11-10 | New `orders` stack on dev: order history and order detail for signed-in shoppers (`/orders/me`, including orders they placed as a guest with the same email), guest tracking links (`/orders/track?token=`) and email lookup (`POST /orders/lookup` emails a fresh link; the first email sent by the app), staff order list (by delivery day, method, status, search, stock shortfalls), status updates per fulfillment group with history, and refunds (Stripe refund, Stripe Tax reversal, optional restock). Shared layer: `sendEmail` and a branded email layout. SES production access confirmed. Paths are `/orders/me...` rather than the spec's `/me/orders...`. Postman: 509 checks, all passing. |
+| 2026-11-10 | New `promotions` stack on dev: staff create, edit, pause/resume and archive codes, list them by state (active, scheduled, expired, paused, archived), see redemptions; public `POST /promotions/check` for the cart. Checkout quote takes `promoCode`: percent, fixed, free delivery and free shipping codes, limited by dates, minimum, items, total uses, uses per customer and first order only, applied before tax. The webhook records each use. Paths are `/promotions/admin...` rather than the spec's `/admin/promotions...` because each stack has its own base path. Postman: 442 checks, all passing. |
 | 2026-11-10 | New `checkout` stack on dev: quote (pricing, fulfillment groups, Tue/Thu dates, delivery and shipping fees, delivery-area check, Stripe Tax), pay (re-price, hold stock, create the PaymentIntent), Stripe webhook (creates the order, takes the stock, records the tax transaction), payment status, and a 5-minute sweep that releases stock from abandoned payments. Tested with Stripe test cards: success, decline then retry, changed cart, abandoned payment. Postman covers guest and signed-in checkout (332 checks). Stripe sandbox connected: keys and webhook secret in SSM (`scripts/put-stripe-secrets.sh`), webhook registered. |
 | 2026-11-09 | Catalog on dev: removed the Square fields, added the new product fields and the categories endpoints. Active cosmetic, cottage-food and TCS products now need ingredients on their label. |
 
@@ -107,10 +110,11 @@ Backend items, roughly in order. The full list with details is in the frontend's
 | Saved addresses: `GET/POST /me/addresses`, `PUT/DELETE /me/addresses/{id}`, with ids and one default address | auth | 🟡 on dev, not prod yet |
 | **Checkout:** quote, pay (create the PaymentIntent), Stripe webhook, status | checkout (new) | 🟡 on dev, not prod yet |
 | **Stripe Tax** in the quote and recorded on payment | checkout | 🟡 on dev (collects $0 until a state is registered) |
-| Stripe Tax reversal on refund | orders | ⬜ with refunds |
+| Stripe Tax reversal on refund | orders | 🟡 on dev, not prod yet |
 | Checkout settings to confirm: shipping rate (placeholder $7.95 flat), delivery-area ZIPs (placeholder: starts with 770, 773 or 774), farm pickup addresses (placeholder ZIPs 77070 and 77301), Stripe tax code per `taxCategory` (all "general" for now). Change them in the `settings` document `{ _id: 'checkout' }`; defaults are in `checkout/src/lib/settings.ts`. | data | ⬜ |
-| **Promo codes:** collections, admin create/edit, `POST /promotions/check`, applied in the quote | checkout or a new stack | ⬜ |
-| **Orders:** `/me/orders`, guest tracking link, staff status changes, refunds | orders (new) | ⬜ |
+| **Promo codes:** collections, admin create/edit/pause, redemptions, `POST /promotions/check`, applied in the quote | promotions (new), checkout | 🟡 on dev, not prod yet |
+| **Orders:** `/orders/me`, guest tracking link and lookup, staff list, status changes, refunds | orders (new) | 🟡 on dev, not prod yet |
+| Refunds made in the Stripe Dashboard (`charge.refunded` webhook) | orders | ⬜ until then, refund from the admin endpoint so tax and stock stay right |
 | **Emails:** order confirmation, status updates, guest tracking link | notifications (new) | ⬜ |
 | Classify every product's `regulatoryClass` | data | ⬜ |
 
@@ -130,8 +134,8 @@ Wholesale and restaurant standing orders, corporate juice delivery, farm-stand P
 
 ## Still to do outside the code
 
-- [x] Run the full Postman tests on dev: 360 checks, all passing (2026-11-10). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
-- [ ] Deploy the dev work to prod: `AWS_PROFILE=jmplutouser2 ./deploy.sh prod shared-infra auth catalog carts checkout`, then run the `catalog`, `carts` and `checkout` index scripts on prod (`./scripts/with-db.sh prod -- npm --prefix catalog run indexes`, same with `carts`). That script also creates the `products_search` Atlas Search index, which Atlas takes about a minute to build.
+- [x] Run the full Postman tests on dev: 509 checks, all passing (2026-11-10). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
+- [ ] Deploy the dev work to prod: `AWS_PROFILE=jmplutouser2 ./deploy.sh prod shared-infra auth catalog carts checkout promotions orders`, then run the `catalog`, `carts`, `checkout`, `promotions` and `orders` index scripts on prod (`./scripts/with-db.sh prod -- npm --prefix catalog run indexes`, same with `carts`). That script also creates the `products_search` Atlas Search index, which Atlas takes about a minute to build.
 - [ ] Create the categories (at least `body-care`) with `PUT /catalog/admin/categories/{slug}`.
 - [ ] Add `/greenlove/prod/cloudinary-url` (needed before uploading product images on prod).
 - [ ] Change the `oars_admin_user` Atlas password (it was exposed). Dev and prod no longer use that user.
@@ -141,7 +145,7 @@ Wholesale and restaurant standing orders, corporate juice delivery, farm-stand P
 - [ ] **Register for Texas sales tax** with the Texas Comptroller, then add the registration in Stripe (More → Tax → Registrations), first in the sandbox to test, then in live mode. Until then Stripe Tax collects $0. Confirm with an accountant how food, juice and cosmetics are taxed, and whether delivery fees are taxable.
 - [ ] Stripe Tax's preset product category is "General - Electronically Supplied Services". Checkout sends a tax code with every line, so it isn't used, but change it to "General - Tangible Goods" so Dashboard-created charges match.
 - [x] Make the first prod admin (done 2026-11-10).
-- [ ] Confirm SES is out of the sandbox in us-east-2 so emails can reach any customer.
+- [x] SES has production access in us-east-2 (50,000 emails a day), so emails can reach any customer (checked 2026-11-10).
 
 ## Suggested hardening
 

@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
-import { Db, MongoServerError, ObjectId } from 'mongodb';
-import { Customer, FulfillmentGroup, Order, farmYear } from '@greenlove/shared';
+import { Db, ObjectId } from 'mongodb';
+import { Customer, FulfillmentGroup, Order, Promotion, PromotionRedemption, farmYear } from '@greenlove/shared';
 import { CheckoutQuote, quotes } from './quote';
 import { commitStock } from './holds';
 
@@ -88,6 +88,9 @@ export async function createOrderForPayment(db: Db, stripe: Stripe, pi: Stripe.P
         provider: 'STRIPE', paymentIntentId: pi.id, status: 'SUCCEEDED', amountCents: pi.amount, currency: 'usd',
         method: paymentMethodOf(pi), refundedCents: 0,
       },
+      ...(quote.promotion?.applied && quote.promotion.promotionId
+        ? { promotion: { promotionId: quote.promotion.promotionId, code: quote.promotion.code, discountCents: quote.promotion.discountCents, feeDiscountCents: quote.promotion.feeDiscountCents } }
+        : {}),
       tax: { calculationIds: quote.tax.map((t) => t.calculationId), transactionIds: [] },
       fulfillmentGroups: groups,
       quoteId: quote._id,
@@ -103,7 +106,8 @@ export async function createOrderForPayment(db: Db, stripe: Stripe, pi: Stripe.P
       order = fresh;
     } catch (err) {
       // Another delivery of this event got there first.
-      if (!(err instanceof MongoServerError && err.code === 11000)) throw err;
+      // Checked by code, not instanceof: the driver class may come from another module copy.
+      if ((err as { code?: number }).code !== 11000) throw err;
       order = await orders(db).findOne({ 'payment.paymentIntentId': pi.id });
       if (!order) throw err;
     }
@@ -115,6 +119,7 @@ export async function createOrderForPayment(db: Db, stripe: Stripe, pi: Stripe.P
     const { short } = await commitStock(db, holdId, quote.groups.flatMap((g) => g.items));
     await orders(db).updateOne({ _id: order._id }, { $set: { inventory: { committedAt: new Date(), short }, updatedAt: new Date() } });
   }
+  if (order.promotion) await recordRedemption(db, order);
   await quotes(db).updateOne(
     { _id: quote._id },
     { $set: { status: 'PAID', orderId: order._id, updatedAt: now, expiresAt: new Date(now.getTime() + 30 * 86400_000) } }
@@ -135,4 +140,28 @@ export async function createOrderForPayment(db: Db, stripe: Stripe, pi: Stripe.P
   }
 
   return order;
+}
+
+// The code's use counts only once the payment succeeds, so a failed payment never uses it up.
+// The unique (promotionId, orderId) index makes this run once per order, and the count rises only then.
+async function recordRedemption(db: Db, order: Order) {
+  const p = order.promotion!;
+  try {
+    await db.collection<PromotionRedemption>('promotionRedemptions').insertOne({
+      _id: new ObjectId(),
+      promotionId: p.promotionId,
+      code: p.code,
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      customerId: order.customerId,
+      email: order.contact.email,
+      discountCents: p.discountCents,
+      feeDiscountCents: p.feeDiscountCents,
+      createdAt: new Date(),
+    });
+  } catch (err) {
+    if ((err as { code?: number }).code === 11000) return; // already recorded
+    throw err;
+  }
+  await db.collection<Promotion>('promotions').updateOne({ _id: p.promotionId }, { $inc: { redemptionCount: 1 } });
 }

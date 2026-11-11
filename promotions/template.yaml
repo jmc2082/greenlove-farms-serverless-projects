@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Promotions Stack (promo codes, staff management and the cart code check)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  MongoDbName:
+    Type: String
+    Default: greenlove_dev
+  SharedLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/shared-layer-arn
+  ApiDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/api-domain-name
+  UserPoolId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/user-pool-id
+  UserPoolClientId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/client-id
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    MemorySize: 256
+    Timeout: 15
+    Architectures:
+      - arm64
+    Layers:
+      - !Ref SharedLayerArn
+    Environment:
+      Variables:
+        MONGODB_URI_PARAM: !Sub "/greenlove/${Environment}/mongodb-uri"
+        MONGODB_DB_NAME: !Ref MongoDbName
+        ENVIRONMENT: !Ref Environment
+        SERVICE_VERSION: "0.1.0"
+
+Resources:
+
+  # ── HTTP API ──────────────────────────────────────────────────────────────────
+  PromotionsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: GreenLove Promotions API
+      Auth:
+        DefaultAuthorizer: CognitoJWT
+        Authorizers:
+          CognitoJWT:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}"
+              audience:
+                - !Ref UserPoolClientId
+            IdentitySource: "$request.header.Authorization"
+      CorsConfiguration:
+        AllowMethods: ["GET", "POST", "PUT", "OPTIONS"]
+        AllowHeaders: ["Content-Type", "Authorization"]
+        AllowOrigins: !Ref AllowedOrigins
+        MaxAge: 600
+      # Slow down anyone trying to guess codes.
+      RouteSettings:
+        "POST /check":
+          ThrottlingBurstLimit: 10
+          ThrottlingRateLimit: 5
+
+  # Served at https://<ApiDomainName>/promotions/...
+  PromotionsApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref ApiDomainName
+      ApiId: !Ref PromotionsApi
+      Stage: !Ref PromotionsApi.Stage
+      ApiMappingKey: promotions
+
+  # ── Health ────────────────────────────────────────────────────────────────────
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-health"
+      CodeUri: src/
+      Handler: handlers/health/index.handler
+      Description: Promotions service health check
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PromotionsApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/health/index.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Public ────────────────────────────────────────────────────────────────────
+  CheckPromotionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-check"
+      CodeUri: src/
+      Handler: handlers/check.handler
+      Description: Quick promo code check for the cart
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PromotionsApi
+            Path: /check
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/check.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Staff (Staff or Admins group) ─────────────────────────────────────────────
+  AdminListPromotionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-list"
+      CodeUri: src/
+      Handler: handlers/admin/list.handler
+      Description: List promotions by state
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Staff0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PromotionsApi
+            Path: /admin
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminCreatePromotionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-create"
+      CodeUri: src/
+      Handler: handlers/admin/create.handler
+      Description: Create a promotion
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Staff0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PromotionsApi
+            Path: /admin
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/create.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminGetPromotionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-get"
+      CodeUri: src/
+      Handler: handlers/admin/get.handler
+      Description: Get a promotion
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Staff0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PromotionsApi
+            Path: /admin/{id}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminUpdatePromotionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-update"
+      CodeUri: src/
+      Handler: handlers/admin/update.handler
+      Description: Update, pause, resume or archive a promotion
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Staff0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PromotionsApi
+            Path: /admin/{id}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/update.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminListRedemptionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-redemptions"
+      CodeUri: src/
+      Handler: handlers/admin/redemptions.handler
+      Description: Orders that used a promotion
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Staff0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref PromotionsApi
+            Path: /admin/{id}/redemptions
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/redemptions.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]

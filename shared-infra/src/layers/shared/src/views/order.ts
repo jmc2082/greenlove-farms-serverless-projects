@@ -9,7 +9,7 @@ export function toPublicOrder(o: Order) {
     placedBy: o.placedBy,
     contact: o.contact,
     totals: o.totals,
-    promoCode: o.promoCode ?? null,
+    promotion: o.promotion ? { code: o.promotion.code, savingsCents: o.promotion.discountCents + o.promotion.feeDiscountCents } : null,
     payment: { status: o.payment.status, method: o.payment.method ?? null, refundedCents: o.payment.refundedCents },
     fulfillmentGroups: o.fulfillmentGroups.map((g) => ({
       id: g._id.toHexString(),

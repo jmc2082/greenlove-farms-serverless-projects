@@ -1,0 +1,357 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Orders Stack (order history, guest tracking links, staff status updates and refunds)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  MongoDbName:
+    Type: String
+    Default: greenlove_dev
+  SharedLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/shared-layer-arn
+  ApiDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/api-domain-name
+  UserPoolId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/user-pool-id
+  UserPoolClientId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/client-id
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+  FromTransactional:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/from-transactional
+  ReplyTo:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/reply-to
+  TransactionalConfigSet:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/transactional-config-set
+  EmailDomain:
+    Type: String
+    Default: greenlove-farms.com
+    Description: SES domain identity (created by domain-infra) that order emails are sent from
+  WebUrl:
+    Type: String
+    Default: http://localhost:3000
+    Description: The website, for links in emails (e.g. <WebUrl>/orders/track?token=...)
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    MemorySize: 256
+    Timeout: 15
+    Architectures:
+      - arm64
+    Layers:
+      - !Ref SharedLayerArn
+    Environment:
+      Variables:
+        MONGODB_URI_PARAM: !Sub "/greenlove/${Environment}/mongodb-uri"
+        MONGODB_DB_NAME: !Ref MongoDbName
+        ENVIRONMENT: !Ref Environment
+        SERVICE_VERSION: "0.1.0"
+        WEB_URL: !Ref WebUrl
+        SES_FROM: !Ref FromTransactional
+        SES_REPLY_TO: !Ref ReplyTo
+        SES_CONFIG_SET: !Ref TransactionalConfigSet
+
+Resources:
+
+  # ── HTTP API ──────────────────────────────────────────────────────────────────
+  OrdersApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: GreenLove Orders API
+      Auth:
+        DefaultAuthorizer: CognitoJWT
+        Authorizers:
+          CognitoJWT:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}"
+              audience:
+                - !Ref UserPoolClientId
+            IdentitySource: "$request.header.Authorization"
+      CorsConfiguration:
+        AllowMethods: ["GET", "POST", "PUT", "OPTIONS"]
+        AllowHeaders: ["Content-Type", "Authorization"]
+        AllowOrigins: !Ref AllowedOrigins
+        MaxAge: 600
+      # Public lookups: slow down guessing.
+      RouteSettings:
+        "POST /lookup":
+          ThrottlingBurstLimit: 5
+          ThrottlingRateLimit: 2
+        "GET /track":
+          ThrottlingBurstLimit: 20
+          ThrottlingRateLimit: 10
+
+  # Served at https://<ApiDomainName>/orders/...
+  OrdersApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref ApiDomainName
+      ApiId: !Ref OrdersApi
+      Stage: !Ref OrdersApi.Stage
+      ApiMappingKey: orders
+
+  # ── Health ────────────────────────────────────────────────────────────────────
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-health"
+      CodeUri: src/
+      Handler: handlers/health/index.handler
+      Description: Orders service health check
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/health/index.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Signed-in shoppers ────────────────────────────────────────────────────────
+  ListMyOrdersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-list-my-orders"
+      CodeUri: src/
+      Handler: handlers/me/list.handler
+      Description: The signed-in shopper's order history
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Signed0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /me
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  GetMyOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-get-my-order"
+      CodeUri: src/
+      Handler: handlers/me/get.handler
+      Description: One of the signed-in shopper's orders
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Signed0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /me/{ref}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Guests ────────────────────────────────────────────────────────────────────
+  TrackOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-track"
+      CodeUri: src/
+      Handler: handlers/track.handler
+      Description: A guest order from its tracking link
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /track
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/track.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  LookupOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-lookup"
+      CodeUri: src/
+      Handler: handlers/lookup.handler
+      Description: Email a fresh tracking link (email + order number)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${TransactionalConfigSet}"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /lookup
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/lookup.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Staff (Staff or Admins group) ─────────────────────────────────────────────
+  AdminListOrdersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-list"
+      CodeUri: src/
+      Handler: handlers/admin/list.handler
+      Description: Staff order list (by delivery day, method, status)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Signed0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /admin
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminGetOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-get"
+      CodeUri: src/
+      Handler: handlers/admin/get.handler
+      Description: Staff view of an order
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Signed0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /admin/{ref}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminGroupStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-group-status"
+      CodeUri: src/
+      Handler: handlers/admin/group-status.handler
+      Description: Move a fulfillment group to its next status
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Signed0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /admin/{ref}/groups/{groupId}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/group-status.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  AdminRefundFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-admin-refund"
+      CodeUri: src/
+      Handler: handlers/admin/refund.handler
+      Description: Refund through Stripe, reverse tax, optionally restock
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+      Events:
+        Signed0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersApi
+            Path: /admin/{ref}/refunds
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/admin/refund.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]

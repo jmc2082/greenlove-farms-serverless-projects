@@ -458,6 +458,77 @@ const carts = folder('Carts', [
   ]),
 ]);
 
+// ── Promotions ──
+const NEEDS_PROMO = "if (!pm.variables.get('promotionId')) pm.execution.skipRequest();";
+const testPromo = {
+  code: 'pm{{runId}}', // stored uppercase
+  description: 'Created by the automated Postman run.',
+  type: 'PERCENT', value: 10,
+  appliesTo: { scope: 'ORDER', ids: [] },
+  perCustomerLimit: 1,
+};
+const savePromo = ['const p = pm.response.json();', set('promotionId', 'p.id'), set('promotionVersion', 'p.version'), set('promoCode', 'p.code')];
+
+const promotionsFolder = folder('Promotions', [
+  req('Health', 'GET', '/promotions/health', { auth: NOAUTH, tests: [status(200)] }),
+  folder('Admin', [
+    req('Create promotion', 'POST', '/promotions/admin', { pre: [NEEDS_ADMIN, "['promotionId', 'promoCode', 'promoMinCode', 'promoMinId', 'orderNumber'].forEach((k) => pm.environment.unset(k));", "if (!pm.environment.get('runId')) pm.environment.set('runId', Date.now().toString(36));"],
+      body: testPromo,
+      tests: [status(201), ...savePromo,
+        "pm.test('stored uppercase', () => pm.expect(p.code).to.eql(p.code.toUpperCase()));",
+        "pm.test('active, with summary', () => { pm.expect(p.state).to.eql('ACTIVE'); pm.expect(p.summary).to.eql('10% off'); });"],
+    }),
+    req('Create promotion (duplicate code)', 'POST', '/promotions/admin', { pre: NEEDS_PROMO, body: testPromo, tests: [status(409)] }),
+    req('Create promotion (invalid)', 'POST', '/promotions/admin', { pre: NEEDS_ADMIN,
+      body: { code: 'x', type: 'PERCENT', value: 150, appliesTo: { scope: 'CATEGORIES', ids: [] }, endsAt: 'soon' },
+      tests: [status(400), "pm.test('field errors', () => pm.expect(pm.response.json().details).to.include.keys('code', 'value', 'appliesTo.ids', 'endsAt'));"],
+    }),
+    req('Create promotion (with minimum)', 'POST', '/promotions/admin', { pre: NEEDS_PROMO,
+      body: { code: 'pmmin{{runId}}', type: 'FIXED', value: 500, minSubtotalCents: 100000, appliesTo: { scope: 'ORDER', ids: [] } },
+      tests: [status(201), 'const p = pm.response.json();', set('promoMinCode', 'p.code'), set('promoMinId', 'p.id'),
+        "pm.test('summary', () => pm.expect(p.summary).to.eql('$5 off, orders over $1000'));"],
+    }),
+    req('Get promotion', 'GET', '/promotions/admin/{{promotionId}}', { pre: NEEDS_PROMO, tests: [status(200), ...savePromo] }),
+    req('List active promotions', 'GET', '/promotions/admin', { pre: NEEDS_PROMO,
+      query: [q('state', 'active', false, 'active | scheduled | expired | paused | archived'), q('q', '{{promoCode}}')],
+      tests: [status(200), "pm.test('listed', () => pm.expect(pm.response.json().items.some((p) => p.id === pm.environment.get('promotionId'))).to.be.true);"],
+    }),
+    req('Pause promotion', 'PUT', '/promotions/admin/{{promotionId}}', { pre: NEEDS_PROMO,
+      body: { version: num('promotionVersion'), status: 'PAUSED' },
+      tests: [status(200), ...savePromo, "pm.test('paused', () => pm.expect(p.state).to.eql('PAUSED'));"],
+    }),
+    req('Check code (paused)', 'POST', '/promotions/check', { auth: NOAUTH, pre: NEEDS_PROMO,
+      body: { code: '{{promoCode}}' },
+      tests: [status(200), "pm.test('not valid', () => pm.expect(pm.response.json().valid).to.be.false);"],
+    }),
+    req('Update promotion (stale version)', 'PUT', '/promotions/admin/{{promotionId}}', { pre: NEEDS_PROMO,
+      body: { version: 1, status: 'ACTIVE' }, tests: [status(409)],
+    }),
+    req('Resume promotion', 'PUT', '/promotions/admin/{{promotionId}}', { pre: NEEDS_PROMO,
+      body: { version: num('promotionVersion'), status: 'ACTIVE' },
+      tests: [status(200), ...savePromo, "pm.test('active again', () => pm.expect(p.state).to.eql('ACTIVE'));"],
+    }),
+    req('List promotions (no token)', 'GET', '/promotions/admin', { auth: NOAUTH, tests: [status(401)] }),
+    req('List promotions (customer token)', 'GET', '/promotions/admin', { auth: bearer('idToken'), tests: [status(403)] }),
+  ], { auth: ADMIN }),
+  folder('Cart code check', [
+    req('Check code', 'POST', '/promotions/check', { pre: NEEDS_PROMO,
+      body: { code: '{{promoCode}}' },
+      description: "The cart's quick check. The checkout quote decides the actual discount.",
+      tests: [status(200), 'const r = pm.response.json();', "pm.test('valid, with summary', () => { pm.expect(r.valid).to.be.true; pm.expect(r.summary).to.eql('10% off'); });"],
+    }),
+    req('Check code (lowercase works)', 'POST', '/promotions/check', {
+      pre: [NEEDS_PROMO, "pm.variables.set('promoCodeLower', String(pm.environment.get('promoCode')).toLowerCase());"],
+      body: { code: '{{promoCodeLower}}' },
+      tests: [status(200), "pm.test('valid', () => pm.expect(pm.response.json().valid).to.be.true);"],
+    }),
+    req('Check code (unknown)', 'POST', '/promotions/check', {
+      body: { code: 'NOT-A-REAL-CODE' },
+      tests: [status(200), "pm.test('not valid', () => { const r = pm.response.json(); pm.expect(r.valid).to.be.false; pm.expect(r.message).to.be.a('string'); });"],
+    }),
+  ], { auth: NOAUTH }),
+]);
+
 // ── Checkout ──
 // Uses the product from Catalog (or Carts' fallback). Payments use Stripe test cards, confirmed with the
 // publishable key exactly as the website's Payment Element does it.
@@ -525,9 +596,21 @@ const checkout = folder('Checkout', [
       body: { cartId: '{{checkoutCartId}}', address: { line1: '1 Main St', city: 'Dallas', state: 'TX', zip: '75201' }, groups: [{ fulfillmentClass: 'STOCKED', method: 'LOCAL_DELIVERY' }] },
       tests: [status(200), 'const q = pm.response.json();', "pm.test('not payable', () => pm.expect(q.payable).to.be.false);"],
     }),
+    req('Quote (promo below its minimum)', 'POST', '/checkout/quote', { pre: [NEEDS_PRODUCT, NEEDS_PROMO],
+      body: { ...checkoutBody('{{checkoutCartId}}'), promoCode: '{{promoMinCode}}' },
+      description: "A code that doesn't apply comes back with the reason; it doesn't block payment.",
+      tests: [status(200), 'const q = pm.response.json();', ...payable,
+        "pm.test('not applied, with reason', () => { pm.expect(q.promotion.applied).to.be.false; pm.expect(q.promotion.message).to.include('minimum'); });",
+        "pm.test('no discount', () => pm.expect(q.totals.discountCents).to.eql(0));"],
+    }),
     req('Quote', 'POST', '/checkout/quote', { pre: NEEDS_PRODUCT,
-      body: checkoutBody('{{checkoutCartId}}'),
-      tests: [status(200), 'const q = pm.response.json();', ...payable, set('quoteId', 'q.quoteId'), set('quoteTotal', 'q.totals.totalCents')],
+      body: { ...checkoutBody('{{checkoutCartId}}'), promoCode: '{{promoCode}}' },
+      description: 'With the 10% code from Promotions (sent empty when that folder was skipped).',
+      tests: [status(200), 'const q = pm.response.json();', ...payable, set('quoteId', 'q.quoteId'), set('quoteTotal', 'q.totals.totalCents'),
+        "if (pm.environment.get('promoCode')) {",
+        "  pm.test('10% code applied', () => { pm.expect(q.promotion.applied, q.promotion.message).to.be.true; pm.expect(q.totals.discountCents).to.eql(Math.round(q.totals.subtotalCents * 0.1)); });",
+        "  pm.test('discount spread over items', () => pm.expect(q.groups.flatMap((g) => g.items).reduce((s, i) => s + i.discountCents, 0)).to.eql(q.totals.discountCents));",
+        "}"],
     }),
     req('Pay (no cartId)', 'POST', '/checkout/pay', { body: { quoteId: '{{quoteId}}' }, tests: [status(400)] }),
     req('Pay (someone else’s cart)', 'POST', '/checkout/pay', {
@@ -563,6 +646,8 @@ const checkout = folder('Checkout', [
         "if (d.status === 'PROCESSING' && tries < 12) { pm.environment.set('statusTries', tries + 1); pm.execution.setNextRequest(pm.info.requestName); } else {",
         "  pm.test('paid', () => pm.expect(d.status).to.eql('PAID'));",
         "  pm.test('order number', () => pm.expect(d.order.orderNumber).to.match(/^GLF-\\d{4}-\\d{6}$/));",
+        "  pm.environment.set('orderNumber', d.order.orderNumber);",
+        "  if (pm.environment.get('promoCode')) pm.test('order keeps the code', () => pm.expect(d.order.promotion.code).to.eql(pm.environment.get('promoCode')));",
         "  pm.test('order total = amount paid', () => pm.expect(d.order.totals.totalCents).to.eql(Number(pm.environment.get('quoteTotal'))));",
         "  pm.environment.unset('statusTries');",
         "}",
@@ -572,6 +657,11 @@ const checkout = folder('Checkout', [
       query: [q('paymentIntent', '{{paymentIntentId}}'), q('clientSecret', '{{paymentIntentId}}_secret_wrong')],
       tests: [status(404)],
     }),
+    req('Promotion redemptions', 'GET', '/promotions/admin/{{promotionId}}/redemptions', { auth: ADMIN, pre: [NEEDS_PAYMENT, NEEDS_PROMO],
+      description: 'The paid order counts as one use of the code.',
+      tests: [status(200), 'const r = pm.response.json();',
+        "pm.test('one redemption, for this order', () => { pm.expect(r.total).to.eql(1); pm.expect(r.items[0].orderNumber).to.eql(pm.environment.get('orderNumber')); });"],
+    }),
     req('Pay after paid', 'POST', '/checkout/pay', { pre: NEEDS_PAYMENT,
       body: { cartId: '{{checkoutCartId}}', quoteId: '{{quoteId}}' },
       description: 'The paid cart is closed, so the guest cart is no longer found.',
@@ -579,13 +669,21 @@ const checkout = folder('Checkout', [
     }),
   ], { auth: NOAUTH }),
   folder('Signed-in checkout', [
+    req('Empty my cart', 'GET', '/carts/me/cart', {
+      description: 'Removes lines left by earlier runs (their test products are archived by Teardown).',
+      tests: [
+        status(200),
+        "for (const l of pm.response.json().lines) pm.sendRequest({ url: pm.variables.replaceIn('{{base_url}}/carts/me/cart/items/') + l.variantId, method: 'DELETE', header: { Authorization: 'Bearer ' + pm.environment.get('idToken') } }, () => {});",
+      ],
+    }),
     req('Add item to my cart', 'PUT', '/carts/me/cart/items', { pre: NEEDS_PRODUCT,
       body: { productId: '{{productId}}', variantId: '{{variantId}}', qty: 1 }, tests: [status(200)],
     }),
     req('Quote', 'POST', '/checkout/me/quote', { pre: NEEDS_PRODUCT,
-      body: { address: checkoutBody().address, groups: checkoutBody().groups },
-      description: 'Contact comes from the account (email is always the verified account email).',
+      body: { address: checkoutBody().address, groups: checkoutBody().groups, promoCode: '{{promoCode}}' },
+      description: 'Contact comes from the account (email is always the verified account email). The guest order above used the same email, so the one-per-customer code is refused.',
       tests: [status(200), 'const q = pm.response.json();', ...payable,
+        "if (pm.environment.get('promoCode') && pm.environment.get('orderNumber')) pm.test('one-per-customer code refused', () => { pm.expect(q.promotion.applied).to.be.false; pm.expect(q.promotion.message).to.include('already used'); });",
         "pm.test('account email used', () => pm.expect(q.contact.email).to.eql(String(pm.environment.get('email')).toLowerCase()));",
         set('meQuoteId', 'q.quoteId')],
     }),
@@ -599,6 +697,84 @@ const checkout = folder('Checkout', [
     }),
     req('Quote (no token)', 'POST', '/checkout/me/quote', { auth: NOAUTH, body: {}, tests: [status(401)] }),
   ]),
+]);
+
+// ── Orders ──
+// Uses the guest order placed in Checkout. It was placed with the test customer's email, so it also shows
+// in that account's history.
+const NEEDS_ORDER = "if (!pm.variables.get('orderNumber')) pm.execution.skipRequest();";
+const NEEDS_ORDER_ADMIN = "if (!pm.variables.get('orderNumber') || !pm.variables.get('adminEmail')) pm.execution.skipRequest();";
+const saveAdminOrder = ['const o = pm.response.json();', set('orderGroupId', 'o.fulfillmentGroups[0].id'), set('orderRefundable', 'o.refundableCents')];
+const ordersFolder = folder('Orders', [
+  req('Health', 'GET', '/orders/health', { auth: NOAUTH, tests: [status(200)] }),
+  folder('My orders', [
+    req('List my orders', 'GET', '/orders/me', { pre: NEEDS_ORDER, query: [q('page', '1'), q('limit', '20')],
+      tests: [status(200), 'const r = pm.response.json();',
+        "pm.test('includes the checkout order', () => pm.expect(r.items.some((o) => o.orderNumber === pm.environment.get('orderNumber'))).to.be.true);",
+        "pm.test('summary line', () => pm.expect(r.items[0].statusSummary).to.be.a('string').that.is.not.empty);"],
+    }),
+    req('Get my order', 'GET', '/orders/me/{{orderNumber}}', { pre: NEEDS_ORDER,
+      tests: [status(200), "pm.test('same order', () => pm.expect(pm.response.json().orderNumber).to.eql(pm.environment.get('orderNumber')));"],
+    }),
+    req('Get my order (not mine)', 'GET', '/orders/me/GLF-2000-000000', { tests: [status(404)] }),
+    req('List my orders (no token)', 'GET', '/orders/me', { auth: NOAUTH, tests: [status(401)] }),
+  ]),
+  folder('Guest lookup', [
+    req('Look up order (no match)', 'POST', '/orders/lookup', {
+      body: { email: 'nobody@example.com', orderNumber: 'GLF-2000-000000' },
+      description: "Answers the same whether or not the order exists. With a real match it emails a fresh tracking link (not run automatically, to avoid sending mail).",
+      tests: [status(202)],
+    }),
+    req('Look up order (bad input)', 'POST', '/orders/lookup', { body: { email: 'x', orderNumber: '123' }, tests: [status(400)] }),
+    req('Track (invalid token)', 'GET', '/orders/track', { query: [q('token', 'not-a-real-token-but-long-enough-0123456789abcdef')], tests: [status(404)] }),
+  ], { auth: NOAUTH }),
+  folder('Admin', [
+    req('List orders (search)', 'GET', '/orders/admin', { pre: NEEDS_ORDER_ADMIN,
+      query: [q('q', '{{orderNumber}}'), q('deliveryDate', '', true, 'YYYY-MM-DD: the Tue/Thu run sheet'), q('method', '', true, 'SHIP | LOCAL_DELIVERY | PICKUP'), q('groupStatus', '', true), q('status', '', true), q('inventoryShort', 'true', true)],
+      tests: [status(200), "pm.test('found', () => pm.expect(pm.response.json().items[0].orderNumber).to.eql(pm.environment.get('orderNumber')));"],
+    }),
+    req('Get order', 'GET', '/orders/admin/{{orderNumber}}', { pre: NEEDS_ORDER_ADMIN,
+      tests: [status(200), ...saveAdminOrder,
+        "pm.test('paid, nothing refunded', () => { pm.expect(o.status).to.eql('PAID'); pm.expect(o.refundableCents).to.eql(o.totals.totalCents); });",
+        set('orderDeliveryDate', 'o.fulfillmentGroups[0].deliveryDate')],
+    }),
+    req('List orders for the delivery day', 'GET', '/orders/admin', {
+      pre: [NEEDS_ORDER_ADMIN, "if (!pm.variables.get('orderDeliveryDate')) pm.execution.skipRequest();"],
+      query: [q('deliveryDate', '{{orderDeliveryDate}}')],
+      tests: [status(200), "pm.test('on the run sheet', () => pm.expect(pm.response.json().items.some((o) => o.orderNumber === pm.environment.get('orderNumber'))).to.be.true);"],
+    }),
+    req('Move group to PREPARING', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', { pre: NEEDS_ORDER_ADMIN,
+      body: { status: 'PREPARING' },
+      tests: [status(200), "pm.test('preparing, logged', () => { const g = pm.response.json().fulfillmentGroups[0]; pm.expect(g.status).to.eql('PREPARING'); pm.expect(g.statusHistory.at(-1).by).to.be.a('string'); });"],
+    }),
+    req('Move group to PREPARING again', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', { pre: NEEDS_ORDER_ADMIN,
+      body: { status: 'PREPARING' }, tests: [status(400)],
+    }),
+    req('Move group to a step it doesn’t have', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', {
+      description: 'Pickup and shipping have different steps (e.g. SHIPPED vs PICKED_UP).',
+      pre: [NEEDS_ORDER_ADMIN, "pm.variables.set('wrongStep', pm.environment.get('checkoutMethod') === 'SHIP' ? 'PICKED_UP' : 'SHIPPED');"],
+      body: { status: '{{wrongStep}}' }, tests: [status(400)],
+    }),
+    req('Refund part (restock 1)', 'POST', '/orders/admin/{{orderNumber}}/refunds', { pre: NEEDS_ORDER_ADMIN,
+      body: { amountCents: 100, reason: 'requested_by_customer', note: 'Postman partial refund', restock: [{ variantId: '{{variantId}}', qty: 1 }] },
+      tests: [status(200), 'const o = pm.response.json();',
+        "pm.test('partially refunded', () => { pm.expect(o.payment.status).to.eql('PARTIALLY_REFUNDED'); pm.expect(o.payment.refundedCents).to.eql(100); });",
+        "pm.test('refund logged with restock', () => pm.expect(o.refunds[0].restocked[0].qty).to.eql(1));"],
+    }),
+    req('Refund more than is left', 'POST', '/orders/admin/{{orderNumber}}/refunds', { pre: NEEDS_ORDER_ADMIN,
+      body: { amountCents: 99999999 }, tests: [status(400)],
+    }),
+    req('Restock more than was bought', 'POST', '/orders/admin/{{orderNumber}}/refunds', { pre: NEEDS_ORDER_ADMIN,
+      body: { amountCents: 1, restock: [{ variantId: '{{variantId}}', qty: 1 }] }, tests: [status(400)],
+    }),
+    req('Refund the rest', 'POST', '/orders/admin/{{orderNumber}}/refunds', { pre: NEEDS_ORDER_ADMIN,
+      body: { note: 'Postman full refund' },
+      tests: [status(200), 'const o = pm.response.json();',
+        "pm.test('fully refunded', () => { pm.expect(o.payment.status).to.eql('REFUNDED'); pm.expect(o.status).to.eql('REFUNDED'); pm.expect(o.refundableCents).to.eql(0); });"],
+    }),
+    req('List orders (customer token)', 'GET', '/orders/admin', { auth: bearer('idToken'), tests: [status(403)] }),
+    req('List orders (no token)', 'GET', '/orders/admin', { auth: NOAUTH, tests: [status(401)] }),
+  ], { auth: ADMIN }),
 ]);
 
 // ── Teardown ──
@@ -621,7 +797,18 @@ const teardown = folder('Teardown', [
     body: testCategory('HIDDEN'),
     tests: [status(200), "pm.environment.unset('testCategoryCreated');"],
   }),
-], { description: 'Archives the product and hides the category created in Catalog → Admin so they leave the storefront.' });
+  req('Archive test promotions', 'GET', '/promotions/admin/{{promotionId}}', {
+    auth: ADMIN,
+    pre: NEEDS_PROMO,
+    description: 'Reads the current version, then archives both test codes.',
+    tests: [
+      status(200),
+      "const archive = (id, version) => pm.sendRequest({ url: pm.variables.replaceIn('{{base_url}}/promotions/admin/') + id, method: 'PUT', header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.environment.get('adminIdToken') }, body: { mode: 'raw', raw: JSON.stringify({ version, status: 'ARCHIVED' }) } }, (err, res) => pm.test('archived ' + id, () => pm.expect(res.json().state).to.eql('ARCHIVED')));",
+      "archive(pm.environment.get('promotionId'), pm.response.json().version);",
+      "if (pm.environment.get('promoMinId')) archive(pm.environment.get('promoMinId'), 1);",
+    ],
+  }),
+], { description: 'Archives the product, category and promo codes created by the run so they leave the storefront.' });
 
 // Refuse to write to prod during automated runs; reads are fine.
 const prodGuard = [
@@ -637,7 +824,7 @@ const collection = {
   info: {
     name: 'GreenLove Farms',
     description: [
-      'Auth, catalog, carts and checkout stacks.',
+      'Auth, catalog, carts, promotions, checkout and orders stacks.',
       '',
       'Run Auth → Login first; it stores idToken, which signed-in requests send as a Bearer token. Catalog → Admin uses adminIdToken from Auth → Admin login.',
       '',
@@ -652,7 +839,7 @@ const collection = {
     { listen: 'prerequest', script: { type: 'text/javascript', exec: prodGuard } },
     { listen: 'test', script: { type: 'text/javascript', exec: commonTests } },
   ],
-  item: [auth, catalog, carts, checkout, teardown],
+  item: [auth, catalog, carts, promotionsFolder, checkout, ordersFolder, teardown],
 };
 
 const env = (name, host) => ({
@@ -664,7 +851,7 @@ const env = (name, host) => ({
     { key: 'adminEmail', value: '', type: 'default', enabled: true },
     { key: 'adminPassword', value: '', type: 'secret', enabled: true },
     { key: 'stripePublishableKey', value: '', type: 'default', enabled: true, description: 'pk_test_… for the sandbox; lets the Checkout folder pay with Stripe test cards' },
-    ...['idToken', 'accessToken', 'refreshToken', 'expiresIn', 'adminIdToken', 'cartId', 'productId', 'productSlug', 'variantId', 'productVersion', 'checkoutCartId', 'checkoutMethod', 'quoteId', 'quoteTotal', 'meQuoteId', 'paymentIntentId', 'clientSecret'].map((key) => ({
+    ...['idToken', 'accessToken', 'refreshToken', 'expiresIn', 'adminIdToken', 'cartId', 'productId', 'productSlug', 'variantId', 'productVersion', 'checkoutCartId', 'checkoutMethod', 'quoteId', 'quoteTotal', 'meQuoteId', 'paymentIntentId', 'clientSecret', 'promotionId', 'promotionVersion', 'promoCode', 'promoMinCode', 'promoMinId', 'orderNumber', 'orderGroupId', 'orderRefundable', 'orderDeliveryDate'].map((key) => ({
       key,
       value: '',
       type: key.endsWith('Token') || key === 'clientSecret' ? 'secret' : 'default',
