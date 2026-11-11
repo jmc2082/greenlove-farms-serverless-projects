@@ -1,10 +1,10 @@
 import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { ObjectId } from 'mongodb';
 import {
-  getDb, getClaims, isStaff, ok, badRequest, forbidden, notFound, conflict, serverError, OrderRefund, Product, publishEvent,
+  getDb, getClaims, isStaff, ok, badRequest, forbidden, notFound, serverError, OrderRefund, Product,
 } from '@greenlove/shared';
 import { orders, refFilter } from '../../lib/orders';
-import { orderStatusFor } from '../../lib/status';
+import { recordRefund, reverseTax } from '../../lib/refunds';
 import { toAdminOrder } from '../../lib/admin-view';
 import { getStripe } from '../../lib/stripe';
 
@@ -14,7 +14,7 @@ const REASONS = ['requested_by_customer', 'duplicate', 'fraudulent'] as const;
  * POST /orders/admin/{ref}/refunds — body { amountCents?, reason?, note?, restock?: [{ variantId, qty }] }
  * Refunds through Stripe (whole remaining amount when amountCents is left out), reverses the matching share
  * of sales tax in Stripe Tax, and optionally puts items back in stock. Staff only.
- * Refunds made in the Stripe Dashboard aren't seen here yet: refund from this endpoint.
+ * Refunds made in the Stripe Dashboard are recorded by the Stripe webhook instead (without restocking).
  */
 export const handler = async (event: APIGatewayProxyEventV2WithJWTAuthorizer): Promise<APIGatewayProxyResultV2> => {
   if (!isStaff(event)) return forbidden('Staff role required');
@@ -58,38 +58,13 @@ export const handler = async (event: APIGatewayProxyEventV2WithJWTAuthorizer): P
     }
 
     const stripe = await getStripe();
-    const n = (order.refunds ?? []).length + 1;
     // The key ties this request to the order's refund state, so a double-click can't refund twice.
-    const keyBase = `${order._id.toHexString()}-${order.payment.refundedCents}-${amount}`;
+    // source=admin tells the Stripe webhook this refund is recorded here, not by it.
     const refund = await stripe.refunds.create(
-      { payment_intent: order.payment.paymentIntentId, amount, reason, metadata: { orderNumber: order.orderNumber } },
-      { idempotencyKey: `refund-${keyBase}` }
+      { payment_intent: order.payment.paymentIntentId, amount, reason, metadata: { orderNumber: order.orderNumber, source: 'admin' } },
+      { idempotencyKey: `refund-${order._id.toHexString()}-${order.payment.refundedCents}-${amount}` }
     );
-
-    // Tax: a full refund reverses each transaction in full; a partial one reverses the same share of each.
-    const taxReversalIds: string[] = [];
-    const full = order.payment.refundedCents === 0 && amount === order.payment.amountCents;
-    for (const [i, original] of order.tax.transactionIds.entries()) {
-      try {
-        const tx = await stripe.tax.transactions.retrieve(original, { expand: ['line_items'] });
-        const txTotal = (tx.line_items?.data ?? []).reduce((s, l) => s + l.amount + l.amount_tax, 0) + (tx.shipping_cost ? tx.shipping_cost.amount + tx.shipping_cost.amount_tax : 0);
-        const share = full ? 0 : Math.round((amount * txTotal) / order.payment.amountCents);
-        if (!full && share <= 0) continue;
-        const reversal = await stripe.tax.transactions.createReversal(
-          {
-            original_transaction: original,
-            reference: `${order.orderNumber}-R${n}-${i + 1}`,
-            ...(full ? { mode: 'full' as const } : { mode: 'partial' as const, flat_amount: -share }),
-            metadata: { refundId: refund.id },
-          },
-          { idempotencyKey: `taxrev-${keyBase}-${i}` }
-        );
-        taxReversalIds.push(reversal.id);
-      } catch (err) {
-        // The money is already back with the customer; a missed reversal only affects tax reports. Log it loudly.
-        console.error('TAX REVERSAL FAILED: fix in Stripe Tax', { order: order.orderNumber, transaction: original, refund: refund.id }, err);
-      }
-    }
+    const taxReversalIds = await reverseTax(stripe, order, refund.id, amount, order.payment.refundedCents);
 
     // Put restocked units back on the shelf, and log each like any other stock adjustment.
     const { sub, email } = getClaims(event);
@@ -107,31 +82,11 @@ export const handler = async (event: APIGatewayProxyEventV2WithJWTAuthorizer): P
       });
     }
 
-    const refundedCents = order.payment.refundedCents + amount;
-    const paymentStatus = refundedCents >= order.payment.amountCents ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
-    const entry: OrderRefund = {
+    const { order: updated } = await recordRefund(db, order, {
       refundId: refund.id, amountCents: amount, reason, note,
       restocked: restock.map((r) => ({ variantId: r.variantId, qty: r.qty })),
       taxReversalIds, by: { sub, email }, at: now,
-    };
-    const updated = await orders(db).findOneAndUpdate(
-      { _id: order._id, 'payment.refundedCents': order.payment.refundedCents },
-      {
-        $set: {
-          'payment.refundedCents': refundedCents,
-          'payment.status': paymentStatus,
-          status: orderStatusFor({ ...order, payment: { ...order.payment, status: paymentStatus } }),
-          updatedAt: now,
-        },
-        $push: { refunds: entry },
-      },
-      { returnDocument: 'after' }
-    );
-    if (!updated) {
-      console.error('refund recorded in Stripe but the order changed meanwhile', { order: order.orderNumber, refund: refund.id });
-      return conflict('The refund went through, but the order was updated at the same time. Reload to see it.');
-    }
-    await publishEvent({ source: 'greenlove.orders', type: 'RefundIssued', detail: { orderId: updated._id.toHexString(), refundId: refund.id } });
+    });
     return ok(toAdminOrder(updated));
   } catch (err) {
     const stripeMessage = (err as { type?: string; message?: string }).type?.startsWith('Stripe') ? (err as Error).message : null;

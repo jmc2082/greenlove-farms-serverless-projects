@@ -7,6 +7,8 @@ const client = new EventBridgeClient({});
 // carries `environment` and the notifications rules match on it.
 export type GreenLoveEvent =
   | { source: 'greenlove.checkout'; type: 'OrderPaid'; detail: { orderId: string } }
+  // A refund made outside our staff endpoint (e.g. in the Stripe Dashboard); the orders stack records it.
+  | { source: 'greenlove.checkout'; type: 'StripeRefundCreated'; detail: { paymentIntentId: string; refundId: string } }
   | { source: 'greenlove.orders'; type: 'FulfillmentStatusChanged'; detail: { orderId: string; groupId: string; status: string } }
   | { source: 'greenlove.orders'; type: 'RefundIssued'; detail: { orderId: string; refundId: string } };
 

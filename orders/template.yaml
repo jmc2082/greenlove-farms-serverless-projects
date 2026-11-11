@@ -363,3 +363,42 @@ Resources:
         Sourcemap: true
         EntryPoints: [handlers/admin/refund.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Refunds made in the Stripe Dashboard (handed over by the checkout webhook) ─
+  StripeRefundFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-stripe-refund"
+      CodeUri: src/
+      Handler: handlers/on-stripe-refund.handler
+      Description: Record refunds made outside the staff endpoint
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+        - Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+      Events:
+        StripeRefunds:
+          Type: EventBridgeRule
+          Properties:
+            # dev and prod share the default bus: match this environment only.
+            Pattern:
+              source: [greenlove.checkout]
+              detail-type: [StripeRefundCreated]
+              detail:
+                environment: [!Ref Environment]
+            RetryPolicy:
+              MaximumEventAgeInSeconds: 21600
+              MaximumRetryAttempts: 20
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/on-stripe-refund.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]

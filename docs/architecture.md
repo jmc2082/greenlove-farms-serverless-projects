@@ -184,7 +184,10 @@ Guests get a `customers` record keyed by email (`cognitoSub: null`), so signing 
 - *Refunds:* `stripe.refunds.create` (whole remainder by default), then a Stripe Tax reversal per tax transaction
   (full, or the same share for a partial refund), optional restock (logged in `inventoryAdjustments` as
   `REFUND_RESTOCK`), and a `refunds[]` entry. Idempotency keys are tied to the order's refunded total so a
-  double-click can't refund twice. Refunds made in the Stripe Dashboard aren't picked up yet.
+  double-click can't refund twice. Refunds made in the Stripe Dashboard reach the checkout webhook as
+  `refund.created`; it hands them to the orders stack (`StripeRefundCreated`), which records them the same way but
+  without restocking. Staff refunds carry `metadata.source=admin` and are skipped there; tax reversals are keyed by
+  refund id and `recordRefund` checks the refund id, so no refund is ever recorded or reversed twice.
 - *Guest links:* a random 32-byte token, stored only as its sha256 in `guestAccessTokenHash`; a new link replaces
   the old one. `POST /orders/lookup` answers 202 either way and only emails the link to the order's address.
 - *Emails to shoppers* (`notifications` stack): checkout publishes `OrderPaid` and orders publishes
@@ -235,7 +238,8 @@ Each route exists for guests (`/checkout/...`, `cartId` in the body) and signed-
    Otherwise holds the stock and creates the PaymentIntent (idempotency key per hold, `metadata.quoteId`/`holdId`),
    returning `clientSecret`. Repeating the call returns the same open payment.
 4. The browser calls `stripe.confirmPayment()`; Stripe handles 3-D Secure and redirects to the confirmation page.
-5. `POST /checkout/webhooks/stripe` — signature-verified, deduplicated. `payment_intent.succeeded` creates the order,
+5. `POST /checkout/webhooks/stripe` — signature-verified, deduplicated. Events: `payment_intent.succeeded`,
+   `payment_intent.payment_failed`, `payment_intent.canceled`, `refund.created`. `payment_intent.succeeded` creates the order,
    commits the stock, marks the cart `CONVERTED` and records the Stripe Tax transaction. `payment_failed` keeps the hold
    (the shopper can retry); `canceled` releases it.
 6. `GET /checkout/status?paymentIntent=&clientSecret=` — the confirmation page polls until the order exists.

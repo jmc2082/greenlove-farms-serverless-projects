@@ -1,6 +1,6 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import Stripe from 'stripe';
-import { getDb, ok, badRequest, serverError } from '@greenlove/shared';
+import { getDb, ok, badRequest, serverError, publishEvent } from '@greenlove/shared';
 import { getStripe, getWebhookSecret } from '../lib/stripe';
 import { createOrderForPayment } from '../lib/orders';
 import { quotes } from '../lib/quote';
@@ -11,7 +11,8 @@ interface WebhookEvent { _id: string; type: string; receivedAt: Date; processedA
 /**
  * POST /checkout/webhooks/stripe — Stripe calls this; no auth beyond the signature.
  * Events: payment_intent.succeeded (create the order), payment_intent.payment_failed (remember the reason),
- * payment_intent.canceled (release the stock hold). Answers 500 on failure so Stripe retries; every
+ * payment_intent.canceled (release the stock hold), refund.created (refunds made outside our staff endpoint,
+ * e.g. in the Stripe Dashboard, are handed to the orders stack to record). Answers 500 on failure so Stripe retries; every
  * step is safe to repeat. Events already processed are skipped.
  */
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
@@ -62,6 +63,16 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
         const pi = evt.data.object;
         if (pi.metadata?.['holdId']) await releaseHold(db, pi.metadata['holdId']);
         await quotes(db).updateOne({ paymentIntentId: pi.id, status: 'PAYING' }, { $set: { status: 'OPEN', updatedAt: now } });
+        break;
+      }
+      case 'refund.created': {
+        const refund = evt.data.object;
+        const pi = typeof refund.payment_intent === 'string' ? refund.payment_intent : refund.payment_intent?.id;
+        // Staff refunds (source=admin) are recorded by the orders endpoint that made them.
+        if (pi && refund.metadata?.['source'] !== 'admin') {
+          const sent = await publishEvent({ source: 'greenlove.checkout', type: 'StripeRefundCreated', detail: { paymentIntentId: pi, refundId: refund.id } });
+          if (!sent) throw new Error('could not hand the refund to the orders stack'); // let Stripe retry
+        }
         break;
       }
       default:
