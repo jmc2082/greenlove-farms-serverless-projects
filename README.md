@@ -3,6 +3,7 @@
 AWS SAM (TypeScript, Node.js 24, arm64) in `us-east-2`, profile `jm_ubuntu_thinkpad_user` (on other machines, set `AWS_PROFILE`, for example `AWS_PROFILE=jmplutouser2 ./deploy.sh dev`).
 Architecture and domain model: [docs/architecture.md](docs/architecture.md).
 What's deployed, what's done and what's next: [docs/roadmap-and-status.md](docs/roadmap-and-status.md).
+How the website calls each endpoint: [docs/frontend-api-guide.md](docs/frontend-api-guide.md).
 
 ## Stacks
 

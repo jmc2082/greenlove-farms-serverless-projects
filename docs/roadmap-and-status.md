@@ -151,7 +151,7 @@ Wholesale and restaurant standing orders, corporate juice delivery, farm-stand P
 - [ ] Optionally change the `greenlove_dev_user` and `greenlove_prod_user` passwords and save the new ones with `put-parameter --overwrite`.
 - [x] Stripe sandbox: keys in dev SSM, webhook registered for `https://api-dev.greenlove-farms.com/checkout/webhooks/stripe` (done 2026-11-10).
 - [x] Stripe live mode: prod webhook `we_1UacvDCjCzxkLI9AFXajbS0Y` registered for `https://api.greenlove-farms.com/checkout/webhooks/stripe` (events `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `refund.created`); live secret key and signing secret in prod SSM (done 2026-11-11).
-- [ ] Set the Stripe public business name and card-statement name to GreenLove Farms (Settings → Business → Public details).
+- [x] Stripe public business name and statement descriptor set to GreenLove Farms (legal name stays OarsLand LLC; done 2026-11-11).
 - [x] Texas sales-tax registration added in live Stripe (active 2026-11-11).
 - [ ] Confirm with an accountant how food, juice and cosmetics are taxed, and whether delivery fees are taxable.
 - [ ] Stripe Tax's preset product category is "General - Electronically Supplied Services". Checkout sends a tax code with every line, so it isn't used, but change it to "General - Tangible Goods" so Dashboard-created charges match.
