@@ -263,7 +263,9 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
   for (const [fulfillmentClass, lines] of groupLines) {
     const key = fulfillmentClass;
     const sel = inputs.selections.find((s) => s.fulfillmentClass === fulfillmentClass);
-    const methodOptions = METHOD_ORDER.filter((m) => lines.every((l) => l.product.fulfillmentProfile.methods.includes(m)));
+    // Pickup is only offered once there's somewhere to pick up from.
+    const methodOptions = METHOD_ORDER.filter((m) => (m !== 'PICKUP' || settings.pickupLocations.length > 0)
+      && lines.every((l) => l.product.fulfillmentProfile.methods.includes(m)));
     const handlingDays = Math.max(0, ...lines.map((l) => l.product.fulfillmentProfile.handlingDays ?? 0));
     const group: QuoteGroup = {
       key, fulfillmentClass, methodOptions, method: null, pickupLocation: null, address: null,
@@ -275,7 +277,14 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     groups.push(group);
 
     if (methodOptions.length === 0) {
-      issues.push({ code: 'NO_COMMON_METHOD', message: 'Some items here can only be shipped and others only delivered or picked up. Check out separately.', groupKey: key });
+      const pickupOnly = settings.pickupLocations.length === 0 && lines.every((l) => l.product.fulfillmentProfile.methods.includes('PICKUP'));
+      issues.push({
+        code: 'NO_COMMON_METHOD',
+        message: pickupOnly
+          ? 'Some items here are pickup only, and pickup isn’t available yet. Remove them to continue.'
+          : 'Some items here can only be shipped and others only delivered or picked up. Check out separately.',
+        groupKey: key,
+      });
       continue;
     }
     if (!sel?.method) {
@@ -294,7 +303,8 @@ export async function buildQuote(ctx: BuildContext): Promise<CheckoutQuote> {
     } else if (!address) {
       issues.push({ code: 'ADDRESS_REQUIRED', message: sel.method === 'SHIP' ? 'Enter a shipping address.' : 'Enter a delivery address.', groupKey: key });
     } else if (sel.method === 'LOCAL_DELIVERY' && !inDeliveryArea(settings, address.zip)) {
-      issues.push({ code: 'OUTSIDE_DELIVERY_AREA', message: 'That address is outside our delivery area. Choose pickup or shipping instead.', groupKey: key });
+      const others = methodOptions.filter((m) => m !== 'LOCAL_DELIVERY').map((m) => (m === 'PICKUP' ? 'pickup' : 'shipping'));
+      issues.push({ code: 'OUTSIDE_DELIVERY_AREA', message: `That address is outside our delivery area.${others.length ? ` Choose ${others.join(' or ')} instead.` : ''}`, groupKey: key });
     } else if (sel.method === 'SHIP' && settings.shipping.states && !settings.shipping.states.includes(address.state)) {
       issues.push({ code: 'SHIPPING_NOT_AVAILABLE', message: `We don't ship to ${address.state} yet.`, groupKey: key });
     } else {

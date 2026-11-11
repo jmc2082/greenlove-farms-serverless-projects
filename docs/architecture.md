@@ -100,7 +100,7 @@ Each stack: `template.yaml`, `samconfig.toml` (default/dev/prod), `package.json`
     perishable: boolean,
   },
   regulatoryClass: 'COSMETIC' | 'WHOLE_PRODUCE' | 'COTTAGE_FOOD' | 'TCS' | 'OTHER',
-  taxCategory: string,                              // maps to a rate in settings
+  taxCategory: 'produce' | 'grocery' | 'supplement' | 'skin_care' | 'soap' | 'prepared' | 'general', // → Stripe tax code (checkout settings)
   images: { publicId: string; alt: string }[],
   variants: [{
     _id, sku, name, priceCents, weightOz, netWeight?,  // weightOz is for shipping; netWeight is label text
@@ -221,7 +221,7 @@ so a failed payment never uses up a code. Two checkouts paying at the same momen
 
 ### Supporting
 - `counters` — `{ _id: 'order-2026', seq }` via `findOneAndUpdate` + `$inc`.
-- `settings` — `{ _id: 'checkout' }` overrides the defaults in `checkout/src/lib/settings.ts`: local delivery fee ($8.95, free from $40), delivery-area ZIPs, shipping rate, pickup farms, Stripe tax code per `taxCategory`, hold and quote minutes. The Tue/Thu schedule and cutoffs live in the shared layer's `delivery.ts`.
+- `settings` — `{ _id: 'checkout' }` overrides the defaults in `checkout/src/lib/settings.ts`: local delivery fee ($8.95, free from $40), delivery-area ZIPs, shipping rate, pickup locations (none yet, so pickup isn't offered), Stripe tax code per `taxCategory`, hold and quote minutes. The Tue/Thu schedule and cutoffs live in the shared layer's `delivery.ts`.
 - `webhookEvents` — Stripe event ids (dedupe; TTL 30 days).
 - `emailLog` — sends, template, SES message id, bounce/complaint state.
 

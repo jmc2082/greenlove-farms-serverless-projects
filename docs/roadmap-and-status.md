@@ -11,9 +11,9 @@ Status key: ✅ done · 🟡 in progress · ⬜ not started
 ## Where things stand
 
 - **Customer accounts work on both dev and prod.** Sign-up, email code, login, token refresh, password reset and `/me` all run on Cognito. The website was switched over to them on 2026-11-09.
-- **Everything built so far is deployed on dev and prod** (prod on 2026-11-11). The prod catalog is empty, which is expected because no products have been added yet. Checkout on prod needs the live Stripe keys and webhook before it can take a payment.
+- **Everything built so far is deployed on dev and prod** (prod on 2026-11-11). The prod catalog is empty, which is expected because no products have been added yet. Live Stripe is connected on prod (keys and webhook, 2026-11-11), so checkout can take real payments.
 - **Checkout and promo codes work on dev with Stripe test payments.** A paid checkout creates the order, takes the stock, records the sale in Stripe Tax and counts the promo code's use. Orders (history, tracking, refunds) and confirmation emails are still to come, and online ordering can't open until they're done.
-- **Sales tax is $0 for now.** Stripe Tax is set up, but no state registration exists yet, so it calculates tax and collects none. Register Texas before launch (see "Still to do outside the code"); no code change is needed when that happens.
+- **Texas sales tax is registered in live Stripe** (active 2026-11-11), so prod collects Texas tax. The sandbox still has no registration and collects $0. Every product is taxed as general goods until the tax codes are confirmed (see "Checkout settings to confirm").
 - **Payments moved from Square to Stripe.** [architecture.md](architecture.md) still describes Square in several places. Where the two disagree, this page and the frontend's `ecommerce-spec.md` are current.
 
 ### Deployed stacks
@@ -25,7 +25,7 @@ Status key: ✅ done · 🟡 in progress · ⬜ not started
 | `auth` | ✅ | ✅ | `https://api[-dev].greenlove-farms.com/auth` |
 | `catalog` | ✅ | ✅ (2026-11-11) | `.../catalog` |
 | `carts` | ✅ | ✅ (2026-11-11) | `.../carts` |
-| `checkout` | ✅ (2026-11-10) | ✅ (2026-11-11; no live Stripe keys yet) | `.../checkout` |
+| `checkout` | ✅ (2026-11-10) | ✅ (2026-11-11; live Stripe connected) | `.../checkout` |
 | `promotions` | ✅ (2026-11-10) | ✅ (2026-11-11) | `.../promotions` |
 | `orders` | ✅ (2026-11-10) | ✅ (2026-11-11) | `.../orders` |
 | `notifications` | ✅ (2026-11-11) | ✅ (2026-11-11) | (no API: runs on events) |
@@ -48,8 +48,8 @@ Each environment's user can open only its own database, so a dev test can never 
 | Setting | Dev | Prod |
 |---|---|---|
 | `mongodb-uri` | ✅ | ✅ |
-| `cloudinary-url` | ✅ | ⬜ **needed before uploading product images on prod** |
-| `stripe-secret-key`, `stripe-webhook-secret` | ✅ (sandbox) | ⬜ live keys, then `./scripts/put-stripe-secrets.sh prod` |
+| `cloudinary-url` | ✅ | ✅ (2026-11-11, same Cloudinary account) |
+| `stripe-secret-key`, `stripe-webhook-secret` | ✅ (sandbox) | ✅ live (2026-11-11) |
 | Cognito ids, SES senders and config sets, layer ARN, API domain | ✅ (created by the stacks) | ✅ |
 
 ---
@@ -66,6 +66,8 @@ Each environment's user can open only its own database, so a dev test can never 
 | 2026-11-09 | Deployed `catalog` and `carts` to prod. Added `scripts/with-db.sh`. `deploy.sh` now accepts `AWS_PROFILE`. |
 | 2026-11-10 | On dev: recently viewed (guest views carry over at login) and saved addresses with ids and a default. Addresses saved earlier get ids the first time they're read. |
 | 2026-11-10 | Catalog on dev: search (Atlas Search, with typo tolerance and synonyms), suggestions, sorting (featured, newest, price), price / delivery-method / in-stock filters, and availability on every product. The shared database connection no longer uses MongoDB's strict API mode, which blocks Atlas Search. Made the first prod admin. |
+| 2026-11-11 | Checkout settings confirmed: delivery limited to 27 ZIPs around the Houston farm, pickup turned off until partner locations exist (checkout stops offering it), products now take one of 7 tax categories (`produce`, `grocery`, `supplement`, `skin_care`, `soap`, `prepared`, `general`), each mapped to a Stripe tax code. |
+| 2026-11-11 | Live Stripe connected on prod: webhook registered with the 4 checkout events, live secret key and signing secret in prod SSM. Texas tax registration active in live Stripe. Prod `cloudinary-url` added. |
 | 2026-11-11 | Deployed saved cards and Stripe-Dashboard refunds to prod (`shared-infra`, `checkout`, `orders`). The prod Stripe webhook isn't registered yet, so neither is active on prod until live Stripe is set up. |
 | 2026-11-11 | Saved cards on dev (decided: at launch). Signed-in shoppers get a Stripe Customer on first use; `POST /checkout/me/customer-session` returns the CustomerSession secret so the Payment Element shows saved cards, a "Save this card" box (for paying while present only) and a remove option; `/checkout/me/pay` attaches the payment to that Customer; the account page can list and remove cards (`/checkout/me/payment-methods`). Postman: 526 checks, all passing. |
 | 2026-11-11 | Refunds made in the Stripe Dashboard are now recorded on dev: the checkout webhook takes `refund.created` and hands refunds that didn't come from the staff endpoint to the orders stack (`StripeRefundCreated` event), which reverses the tax, updates the order and sends the refund email. Staff refunds are tagged `source=admin` so they're never recorded twice; tax reversals are keyed by refund id. Sandbox webhook now also sends `refund.created`. |
@@ -117,7 +119,8 @@ Backend items, roughly in order. The full list with details is in the frontend's
 | **Checkout:** quote, pay (create the PaymentIntent), Stripe webhook, status | checkout (new) | ✅ dev and prod |
 | **Stripe Tax** in the quote and recorded on payment | checkout | ✅ dev and prod (collects $0 until a state is registered) |
 | Stripe Tax reversal on refund | orders | ✅ dev and prod |
-| Checkout settings to confirm: shipping rate (placeholder $7.95 flat), delivery-area ZIPs (placeholder: starts with 770, 773 or 774), farm pickup addresses (placeholder ZIPs 77070 and 77301), Stripe tax code per `taxCategory` (all "general" for now). Change them in the `settings` document `{ _id: 'checkout' }`; defaults are in `checkout/src/lib/settings.ts`. | data | ⬜ |
+| Checkout settings confirmed (2026-11-11): $7.95 flat shipping; $8.95 local delivery, free from $40; delivery to 27 ZIPs within about 25 miles of the Houston farm (77070); no pickup until partner locations are set; a Stripe tax code per `taxCategory`. Change them in the `settings` document `{ _id: 'checkout' }`; defaults are in `checkout/src/lib/settings.ts`. | checkout | ✅ |
+| Pickup locations: add partner stores (and the Conroe farm once built). Each needs an id in `PICKUP_LOCATION_IDS` and an entry in checkout settings `pickupLocations`. | checkout, data | ⬜ |
 | **Promo codes:** collections, admin create/edit/pause, redemptions, `POST /promotions/check`, applied in the quote | promotions (new), checkout | ✅ dev and prod |
 | **Orders:** `/orders/me`, guest tracking link and lookup, staff list, status changes, refunds | orders (new) | ✅ dev and prod |
 | Refunds made in the Stripe Dashboard: recorded on the order with tax reversal and refund email (no restock) | checkout webhook, orders | ✅ dev and prod |
@@ -143,12 +146,14 @@ Wholesale and restaurant standing orders, corporate juice delivery, farm-stand P
 - [x] Run the full Postman tests on dev: 526 checks, all passing (2026-11-11). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
 - [x] Deploy the dev work to prod (2026-11-11): all stacks and indexes.
 - [ ] Create the categories (at least `body-care`) with `PUT /catalog/admin/categories/{slug}`.
-- [ ] Add `/greenlove/prod/cloudinary-url` (needed before uploading product images on prod).
+- [x] Add `/greenlove/prod/cloudinary-url` (done 2026-11-11).
 - [ ] Change the `oars_admin_user` Atlas password (it was exposed). Dev and prod no longer use that user.
 - [ ] Optionally change the `greenlove_dev_user` and `greenlove_prod_user` passwords and save the new ones with `put-parameter --overwrite`.
 - [x] Stripe sandbox: keys in dev SSM, webhook registered for `https://api-dev.greenlove-farms.com/checkout/webhooks/stripe` (done 2026-11-10).
-- [ ] Stripe live mode before launch: register the prod webhook (`https://api.greenlove-farms.com/checkout/webhooks/stripe`, events `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `refund.created`), put its signing secret and the live secret key in `.env`, then run `./scripts/put-stripe-secrets.sh prod`. Set the public business name and card-statement name to GreenLove Farms (Settings → Business → Public details).
-- [ ] **Register for Texas sales tax** with the Texas Comptroller, then add the registration in Stripe (More → Tax → Registrations), first in the sandbox to test, then in live mode. Until then Stripe Tax collects $0. Confirm with an accountant how food, juice and cosmetics are taxed, and whether delivery fees are taxable.
+- [x] Stripe live mode: prod webhook `we_1UacvDCjCzxkLI9AFXajbS0Y` registered for `https://api.greenlove-farms.com/checkout/webhooks/stripe` (events `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `refund.created`); live secret key and signing secret in prod SSM (done 2026-11-11).
+- [ ] Set the Stripe public business name and card-statement name to GreenLove Farms (Settings → Business → Public details).
+- [x] Texas sales-tax registration added in live Stripe (active 2026-11-11).
+- [ ] Confirm with an accountant how food, juice and cosmetics are taxed, and whether delivery fees are taxable.
 - [ ] Stripe Tax's preset product category is "General - Electronically Supplied Services". Checkout sends a tax code with every line, so it isn't used, but change it to "General - Tangible Goods" so Dashboard-created charges match.
 - [x] Make the first prod admin (done 2026-11-10).
 - [x] SES has production access in us-east-2 (50,000 emails a day), so emails can reach any customer (checked 2026-11-10).

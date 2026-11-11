@@ -1310,7 +1310,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"general\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 800,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\",\n      \"onHand\": 25\n    }\n  ]\n}",
+                  "raw": "{\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"LOCAL_DELIVERY\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"soap\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 800,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\",\n      \"onHand\": 25\n    }\n  ]\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1413,6 +1413,59 @@
               ]
             },
             {
+              "name": "Create product (unknown tax category)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-badtax-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"DRAFT\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"LOCAL_DELIVERY\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"Produce\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 800,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\",\n      \"onHand\": 25\n    }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/catalog/admin/products",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "catalog",
+                    "admin",
+                    "products"
+                  ]
+                }
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (!pm.variables.get('adminEmail')) pm.execution.skipRequest();"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status 400', () => pm.response.to.have.status(400));",
+                      "pm.test('names the field', () => pm.expect(JSON.stringify(pm.response.json())).to.include('taxCategory'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
               "name": "Create product (active without label)",
               "request": {
                 "method": "POST",
@@ -1424,7 +1477,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-nolabel-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": null,\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"general\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"sku\": \"PM-NOLABEL-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 800,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\",\n      \"onHand\": 25\n    }\n  ]\n}",
+                  "raw": "{\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-nolabel-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": null,\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"LOCAL_DELIVERY\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"soap\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"sku\": \"PM-NOLABEL-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 800,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\",\n      \"onHand\": 25\n    }\n  ]\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1518,7 +1571,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"version\": {{productVersion}},\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"general\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"id\": \"{{variantId}}\",\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 900,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\"\n    }\n  ]\n}",
+                  "raw": "{\n  \"version\": {{productVersion}},\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"LOCAL_DELIVERY\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"soap\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"id\": \"{{variantId}}\",\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 900,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\"\n    }\n  ]\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -1578,7 +1631,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"version\": 0,\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"general\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"id\": \"{{variantId}}\",\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 900,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\"\n    }\n  ]\n}",
+                  "raw": "{\n  \"version\": 0,\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ACTIVE\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"LOCAL_DELIVERY\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"soap\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"id\": \"{{variantId}}\",\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 900,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\"\n    }\n  ]\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -4373,7 +4426,7 @@
                       "pm.test('asks for a method and contact', () => pm.expect(q.issues.map((i) => i.code)).to.include.members(['METHOD_REQUIRED', 'CONTACT_REQUIRED']));",
                       "pm.test('offers methods', () => pm.expect(q.groups[0].methodOptions).to.be.an('array').that.is.not.empty);",
                       "const opts = (q.groups[0] || {}).methodOptions || [];",
-                      "pm.environment.set('checkoutMethod', opts.includes('PICKUP') ? 'PICKUP' : opts[0] || 'PICKUP');"
+                      "pm.environment.set('checkoutMethod', ['PICKUP', 'LOCAL_DELIVERY', 'SHIP'].find((m) => opts.includes(m)) || 'PICKUP');"
                     ]
                   }
                 }
@@ -6058,7 +6111,7 @@
               ]
             },
             {
-              "name": "Move group to PREPARING",
+              "name": "Move group forward",
               "request": {
                 "method": "PUT",
                 "header": [
@@ -6069,7 +6122,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"status\": \"PREPARING\"\n}",
+                  "raw": "{\n  \"status\": \"{{nextStep}}\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -6088,7 +6141,8 @@
                     "groups",
                     "{{orderGroupId}}"
                   ]
-                }
+                },
+                "description": "Shipped orders start at PREPARING and move to SHIPPED; pickup and delivery start at SCHEDULED and move to PREPARING."
               },
               "event": [
                 {
@@ -6096,7 +6150,8 @@
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "if (!pm.variables.get('orderNumber') || !pm.variables.get('adminEmail')) pm.execution.skipRequest();"
+                      "if (!pm.variables.get('orderNumber') || !pm.variables.get('adminEmail')) pm.execution.skipRequest();",
+                      "pm.variables.set('nextStep', pm.environment.get('checkoutMethod') === 'SHIP' ? 'SHIPPED' : 'PREPARING');"
                     ]
                   }
                 },
@@ -6106,14 +6161,14 @@
                     "type": "text/javascript",
                     "exec": [
                       "pm.test('status 200', () => pm.response.to.have.status(200));",
-                      "pm.test('preparing, logged', () => { const g = pm.response.json().fulfillmentGroups[0]; pm.expect(g.status).to.eql('PREPARING'); pm.expect(g.statusHistory.at(-1).by).to.be.a('string'); });"
+                      "pm.test('moved, logged', () => { const g = pm.response.json().fulfillmentGroups[0]; pm.expect(g.status).to.eql(pm.variables.get('nextStep')); pm.expect(g.statusHistory.at(-1).by).to.be.a('string'); });"
                     ]
                   }
                 }
               ]
             },
             {
-              "name": "Move group to PREPARING again",
+              "name": "Move group to the same step again",
               "request": {
                 "method": "PUT",
                 "header": [
@@ -6124,7 +6179,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"status\": \"PREPARING\"\n}",
+                  "raw": "{\n  \"status\": \"{{nextStep}}\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -6151,7 +6206,8 @@
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "if (!pm.variables.get('orderNumber') || !pm.variables.get('adminEmail')) pm.execution.skipRequest();"
+                      "if (!pm.variables.get('orderNumber') || !pm.variables.get('adminEmail')) pm.execution.skipRequest();",
+                      "pm.variables.set('nextStep', pm.environment.get('checkoutMethod') === 'SHIP' ? 'SHIPPED' : 'PREPARING');"
                     ]
                   }
                 },
@@ -6598,7 +6654,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"version\": {{productVersion}},\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ARCHIVED\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"general\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"id\": \"{{variantId}}\",\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 900,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\"\n    }\n  ]\n}",
+              "raw": "{\n  \"version\": {{productVersion}},\n  \"name\": \"Postman Test Soap {{runId}}\",\n  \"slug\": \"postman-test-{{runId}}\",\n  \"description\": \"Created by the automated Postman run. Safe to delete.\",\n  \"shortDescription\": \"Postman test product.\",\n  \"searchTerms\": [\n    \"postman\",\n    \"test bar\"\n  ],\n  \"label\": {\n    \"ingredients\": \"Saponified olive oil, water\",\n    \"allergens\": []\n  },\n  \"storage\": \"Keep dry.\",\n  \"badges\": [\n    \"NEW\"\n  ],\n  \"category\": \"postman-test\",\n  \"status\": \"ARCHIVED\",\n  \"fulfillmentClass\": \"STOCKED\",\n  \"fulfillmentProfile\": {\n    \"methods\": [\n      \"SHIP\",\n      \"LOCAL_DELIVERY\",\n      \"PICKUP\"\n    ],\n    \"perishable\": false,\n    \"handlingDays\": 2\n  },\n  \"regulatoryClass\": \"COSMETIC\",\n  \"taxCategory\": \"soap\",\n  \"images\": [],\n  \"variants\": [\n    {\n      \"id\": \"{{variantId}}\",\n      \"sku\": \"PM-{{runId}}\",\n      \"name\": \"4 oz bar\",\n      \"priceCents\": 900,\n      \"weightOz\": 4,\n      \"netWeight\": \"4 oz (113 g)\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"

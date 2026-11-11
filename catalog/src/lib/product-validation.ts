@@ -12,6 +12,8 @@ import {
   FULFILLMENT_CLASSES,
   FULFILLMENT_METHODS,
   REGULATORY_CLASSES,
+  TAX_CATEGORIES,
+  TaxCategory,
   PRODUCT_STATUSES,
   RegulatoryClass,
   ProductStatus,
@@ -130,8 +132,8 @@ export function validateProduct(
     errors['regulatoryClass'] = `one of ${REGULATORY_CLASSES.join(', ')}`;
   }
 
-  const taxCategory = text(raw['taxCategory'], 40);
-  if (!taxCategory) errors['taxCategory'] = 'required';
+  const taxCategory = raw['taxCategory'] as TaxCategory;
+  if (!TAX_CATEGORIES.includes(taxCategory)) errors['taxCategory'] = `one of ${TAX_CATEGORIES.join(', ')}`;
 
   // ── Label ──
   let label: ProductLabel | undefined;

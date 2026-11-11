@@ -69,9 +69,9 @@ const testProduct = (status, variant) => ({
   category: 'postman-test',
   status,
   fulfillmentClass: 'STOCKED',
-  fulfillmentProfile: { methods: ['SHIP', 'PICKUP'], perishable: false, handlingDays: 2 },
+  fulfillmentProfile: { methods: ['SHIP', 'LOCAL_DELIVERY', 'PICKUP'], perishable: false, handlingDays: 2 },
   regulatoryClass: 'COSMETIC',
-  taxCategory: 'general',
+  taxCategory: 'soap',
   images: [],
   variants: [variant],
 });
@@ -257,6 +257,11 @@ const catalog = folder('Catalog', [
       pre: NEEDS_ADMIN,
       body: { name: '', variants: [] },
       tests: [status(400), errorBody],
+    }),
+    req('Create product (unknown tax category)', 'POST', '/catalog/admin/products', {
+      pre: NEEDS_ADMIN,
+      body: { ...testProduct('DRAFT', newVariant), slug: 'postman-badtax-{{runId}}', taxCategory: 'Produce' },
+      tests: [status(400), "pm.test('names the field', () => pm.expect(JSON.stringify(pm.response.json())).to.include('taxCategory'));"],
     }),
     req('Create product (active without label)', 'POST', '/catalog/admin/products', {
       pre: NEEDS_ADMIN,
@@ -534,7 +539,9 @@ const promotionsFolder = folder('Promotions', [
 // publishable key exactly as the website's Payment Element does it.
 const pickMethod = [
   "const opts = (q.groups[0] || {}).methodOptions || [];",
-  "pm.environment.set('checkoutMethod', opts.includes('PICKUP') ? 'PICKUP' : opts[0] || 'PICKUP');",
+  // Pickup when offered, else local delivery (the test address is in the area), else shipping. Shipping
+  // would make 'Move group forward' send a real "shipped" email, so it's last.
+  "pm.environment.set('checkoutMethod', ['PICKUP', 'LOCAL_DELIVERY', 'SHIP'].find((m) => opts.includes(m)) || 'PICKUP');",
 ];
 const checkoutBody = (cartId) => ({
   ...(cartId ? { cartId } : {}),
@@ -752,12 +759,15 @@ const ordersFolder = folder('Orders', [
       query: [q('deliveryDate', '{{orderDeliveryDate}}')],
       tests: [status(200), "pm.test('on the run sheet', () => pm.expect(pm.response.json().items.some((o) => o.orderNumber === pm.environment.get('orderNumber'))).to.be.true);"],
     }),
-    req('Move group to PREPARING', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', { pre: NEEDS_ORDER_ADMIN,
-      body: { status: 'PREPARING' },
-      tests: [status(200), "pm.test('preparing, logged', () => { const g = pm.response.json().fulfillmentGroups[0]; pm.expect(g.status).to.eql('PREPARING'); pm.expect(g.statusHistory.at(-1).by).to.be.a('string'); });"],
+    req('Move group forward', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', {
+      description: 'Shipped orders start at PREPARING and move to SHIPPED; pickup and delivery start at SCHEDULED and move to PREPARING.',
+      pre: [NEEDS_ORDER_ADMIN, "pm.variables.set('nextStep', pm.environment.get('checkoutMethod') === 'SHIP' ? 'SHIPPED' : 'PREPARING');"],
+      body: { status: '{{nextStep}}' },
+      tests: [status(200), "pm.test('moved, logged', () => { const g = pm.response.json().fulfillmentGroups[0]; pm.expect(g.status).to.eql(pm.variables.get('nextStep')); pm.expect(g.statusHistory.at(-1).by).to.be.a('string'); });"],
     }),
-    req('Move group to PREPARING again', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', { pre: NEEDS_ORDER_ADMIN,
-      body: { status: 'PREPARING' }, tests: [status(400)],
+    req('Move group to the same step again', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', {
+      pre: [NEEDS_ORDER_ADMIN, "pm.variables.set('nextStep', pm.environment.get('checkoutMethod') === 'SHIP' ? 'SHIPPED' : 'PREPARING');"],
+      body: { status: '{{nextStep}}' }, tests: [status(400)],
     }),
     req('Move group to a step it doesn’t have', 'PUT', '/orders/admin/{{orderNumber}}/groups/{{orderGroupId}}', {
       description: 'Pickup and shipping have different steps (e.g. SHIPPED vs PICKED_UP).',

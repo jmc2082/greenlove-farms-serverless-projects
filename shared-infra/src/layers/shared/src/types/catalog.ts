@@ -9,6 +9,17 @@ export type FulfillmentMethod = (typeof FULFILLMENT_METHODS)[number];
 export const REGULATORY_CLASSES = ['COSMETIC', 'WHOLE_PRODUCE', 'COTTAGE_FOOD', 'TCS', 'OTHER'] as const;
 export type RegulatoryClass = (typeof REGULATORY_CLASSES)[number];
 
+// How a product is taxed. Checkout maps each to a Stripe tax code (checkout settings `taxCodes`).
+//   produce:    microgreens, salad greens, lettuce heads, herbs (exempt in Texas)
+//   grocery:    raw juices, juice cleanses, packaged food with a Nutrition Facts label (exempt in Texas)
+//   supplement: anything labeled with a Supplement Facts panel (e.g. an elderberry syrup sold as a supplement)
+//   skin_care:  body butter, sugar scrubs, lotions
+//   soap:       bar soap
+//   prepared:   ready-to-eat food (food-truck items, if ever sold online)
+//   general:    anything else (taxed as general goods)
+export const TAX_CATEGORIES = ['produce', 'grocery', 'supplement', 'skin_care', 'soap', 'prepared', 'general'] as const;
+export type TaxCategory = (typeof TAX_CATEGORIES)[number];
+
 export const PRODUCT_STATUSES = ['DRAFT', 'ACTIVE', 'ARCHIVED'] as const;
 export type ProductStatus = (typeof PRODUCT_STATUSES)[number];
 
@@ -65,7 +76,7 @@ export interface Product {
   fulfillmentClass: FulfillmentClass;
   fulfillmentProfile: FulfillmentProfile;
   regulatoryClass: RegulatoryClass;
-  taxCategory: string;
+  taxCategory: TaxCategory;
   images: ProductImage[];
   variants: ProductVariant[];
   priceFromCents?: number; // lowest variant price, kept in step on every write (for price sort and filters)

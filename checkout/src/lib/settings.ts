@@ -29,26 +29,39 @@ export interface CheckoutSettings {
 }
 
 /**
- * Defaults match the website's static-data/site.ts deliveryRules ($8.95 delivery, free from $40).
- * Placeholders still to confirm: shipping rate, delivery-area ZIPs, farm addresses, tax codes per category.
+ * Confirmed 2026-11-11: $8.95 delivery (free from $40), $7.95 flat shipping, delivery from the Houston farm
+ * (77070) to the ZIPs below, no pickup until partner locations are set. Tax codes: confirm with an accountant.
  * Override any of these with a `settings` document { _id: 'checkout', ... } (merged one level deep).
  */
 export const DEFAULT_SETTINGS: CheckoutSettings = {
   localDelivery: {
     feeCents: 895,
     freeFromCents: 4000,
-    // Roughly Houston (770), the north suburbs incl. Conroe and Spring (773) and the west/northwest
-    // suburbs incl. Cypress and Katy (774). Wider than 25 miles in places: narrow it before launch.
-    zipPrefixes: ['770', '773', '774'],
-    zips: [],
+    zipPrefixes: [],
+    // Within about 25 miles of the Houston farm (77070).
+    zips: [
+      '77070', '77065', '77066', '77068', '77069', '77014',          // NW Houston, Champions
+      '77429', '77433', '77095',                                     // Cypress
+      '77375', '77377',                                              // Tomball
+      '77379', '77388', '77373', '77073', '77090',                   // Spring, North Houston
+      '77064', '77040', '77041', '77086', '77088', '77091', '77067', // Greater NW and north-central Houston
+      '77037', '77076', '77018', '77092',
+    ],
     dateOptions: 4,
   },
   shipping: { flatCents: 795, freeFromCents: null, states: null },
-  pickupLocations: [
-    { id: 'HOUSTON', name: 'Houston Farm', address: { city: 'Houston', state: 'TX', zip: '77070' } },
-    { id: 'CONROE', name: 'Conroe Farm', address: { city: 'Conroe', state: 'TX', zip: '77301' } },
-  ],
-  taxCodes: { general: 'txcd_99999999' }, // General - Tangible Goods
+  // None yet: pickup isn't offered until partner locations are added (each needs an id in PICKUP_LOCATION_IDS).
+  pickupLocations: [],
+  // Keys are the product TAX_CATEGORIES.
+  taxCodes: {
+    produce: 'txcd_40040019',    // Vegetables
+    grocery: 'txcd_40040000',    // Food for Non-Immediate Consumption
+    supplement: 'txcd_40090001', // Dietary Supplements
+    skin_care: 'txcd_32050013',  // Skin Care Products
+    soap: 'txcd_99999999',       // General - Tangible Goods
+    prepared: 'txcd_40060003',   // Food for Immediate Consumption
+    general: 'txcd_99999999',    // General - Tangible Goods
+  },
   holdMinutes: 30,
   quoteMinutes: 30,
 };
