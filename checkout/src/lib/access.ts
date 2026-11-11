@@ -46,3 +46,9 @@ export function parseBody(event: CheckoutEvent): Record<string, unknown> | null 
     return null;
   }
 }
+
+// Signed-in routes that don't need a cart (saved cards).
+export async function loadCustomer(db: Db, event: APIGatewayProxyEventV2WithJWTAuthorizer): Promise<{ ok: true; customer: Customer } | { ok: false; error: APIGatewayProxyResultV2 }> {
+  const customer = await db.collection<Customer>('customers').findOne({ cognitoSub: getClaims(event).sub });
+  return customer ? { ok: true, customer } : { ok: false, error: notFound('Customer profile not found') };
+}

@@ -5356,6 +5356,129 @@
               ]
             },
             {
+              "name": "Saved cards: session for the Payment Element",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/checkout/me/customer-session",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "checkout",
+                    "me",
+                    "customer-session"
+                  ]
+                },
+                "description": "Pass customerSessionClientSecret to stripe.elements() to show saved cards and a \"Save this card\" box."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status 200', () => pm.response.to.have.status(200));",
+                      "pm.test('session secret', () => pm.expect(pm.response.json().customerSessionClientSecret).to.match(/^cuss_/));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Saved cards: list",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/checkout/me/payment-methods",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "checkout",
+                    "me",
+                    "payment-methods"
+                  ]
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status 200', () => pm.response.to.have.status(200));",
+                      "pm.test('list', () => pm.expect(pm.response.json().items).to.be.an('array'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Saved cards: remove a card that isn’t mine",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/checkout/me/payment-methods/pm_1NotMine000000000000000",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "checkout",
+                    "me",
+                    "payment-methods",
+                    "pm_1NotMine000000000000000"
+                  ]
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status 404', () => pm.response.to.have.status(404));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Saved cards: list (no token)",
+              "request": {
+                "method": "GET",
+                "auth": {
+                  "type": "noauth"
+                },
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/checkout/me/payment-methods",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "checkout",
+                    "me",
+                    "payment-methods"
+                  ]
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status 401', () => pm.response.to.have.status(401));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
               "name": "Pay (guest quote with a token)",
               "request": {
                 "method": "POST",

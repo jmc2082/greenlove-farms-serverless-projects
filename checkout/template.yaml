@@ -61,7 +61,7 @@ Resources:
                 - !Ref UserPoolClientId
             IdentitySource: "$request.header.Authorization"
       CorsConfiguration:
-        AllowMethods: ["GET", "POST", "OPTIONS"]
+        AllowMethods: ["GET", "POST", "DELETE", "OPTIONS"]
         AllowHeaders: ["Content-Type", "Authorization"]
         AllowOrigins: !Ref AllowedOrigins
         MaxAge: 600
@@ -209,6 +209,69 @@ Resources:
         Target: es2022
         Sourcemap: true
         EntryPoints: [handlers/status.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Saved cards (signed-in shoppers) ─────────────────────────────────────────
+  CustomerSessionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-customer-session"
+      CodeUri: src/
+      Handler: handlers/customer-session.handler
+      Description: Stripe CustomerSession for saved cards in the Payment Element
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+      Events:
+        Customer0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /me/customer-session
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/customer-session.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  PaymentMethodsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-payment-methods"
+      CodeUri: src/
+      Handler: handlers/payment-methods.handler
+      Description: List or remove the shopper's saved cards
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+      Events:
+        Customer0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /me/payment-methods
+            Method: GET
+        Customer1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /me/payment-methods/{id}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/payment-methods.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
 
   # ── Stripe webhook (signature-verified; creates orders) ──────────────────────

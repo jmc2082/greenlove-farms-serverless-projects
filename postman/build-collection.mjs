@@ -692,6 +692,15 @@ const checkout = folder('Checkout', [
       description: 'Left unpaid on purpose: the sweep releases the held stock after 30 minutes.',
       tests: [status(200), "pm.test('client secret', () => pm.expect(pm.response.json().clientSecret).to.match(/^pi_.+_secret_/));"],
     }),
+    req('Saved cards: session for the Payment Element', 'POST', '/checkout/me/customer-session', {
+      description: 'Pass customerSessionClientSecret to stripe.elements() to show saved cards and a "Save this card" box.',
+      tests: [status(200), "pm.test('session secret', () => pm.expect(pm.response.json().customerSessionClientSecret).to.match(/^cuss_/));"],
+    }),
+    req('Saved cards: list', 'GET', '/checkout/me/payment-methods', {
+      tests: [status(200), "pm.test('list', () => pm.expect(pm.response.json().items).to.be.an('array'));"],
+    }),
+    req('Saved cards: remove a card that isn’t mine', 'DELETE', '/checkout/me/payment-methods/pm_1NotMine000000000000000', { tests: [status(404)] }),
+    req('Saved cards: list (no token)', 'GET', '/checkout/me/payment-methods', { auth: NOAUTH, tests: [status(401)] }),
     req('Pay (guest quote with a token)', 'POST', '/checkout/me/pay', { pre: NEEDS_PRODUCT,
       body: { quoteId: '{{quoteId}}' }, tests: [status(404)],
     }),

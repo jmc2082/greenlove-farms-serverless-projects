@@ -7,6 +7,8 @@ import { CheckoutQuote, buildQuote, quotes, sha256, toQuoteView } from '../lib/q
 import { holds, placeHold, releaseHold } from '../lib/holds';
 import { CheckoutSettings, getSettings } from '../lib/settings';
 import { getStripe } from '../lib/stripe';
+import { ensureStripeCustomer } from '../lib/stripe-customer';
+import { Customer } from '@greenlove/shared';
 
 const LOCK_MS = 20_000;
 const OPEN_STATES: Stripe.PaymentIntent.Status[] = ['requires_payment_method', 'requires_confirmation', 'requires_action'];
@@ -81,7 +83,7 @@ export const handler = async (event: CheckoutEvent): Promise<APIGatewayProxyResu
       await abandonPayment(db, stripe, locked);
     }
 
-    return await startPayment(db, stripe, settings, locked, now);
+    return await startPayment(db, stripe, settings, locked, now, shopper.customer);
   } catch (err) {
     console.error('checkout-pay error', err);
     return serverError();
@@ -90,7 +92,7 @@ export const handler = async (event: CheckoutEvent): Promise<APIGatewayProxyResu
   }
 };
 
-async function startPayment(db: Db, stripe: Stripe, settings: CheckoutSettings, quote: CheckoutQuote, now: Date) {
+async function startPayment(db: Db, stripe: Stripe, settings: CheckoutSettings, quote: CheckoutQuote, now: Date, customer: Customer | null) {
   const attempt = quote.attempt + 1;
   const holdId = `${quote._id}:${attempt}`;
   const items = quote.groups.flatMap((g) => g.items);
@@ -101,6 +103,8 @@ async function startPayment(db: Db, stripe: Stripe, settings: CheckoutSettings, 
   }
 
   const contact = quote.contact!;
+  // Signed in: pay as the shopper's Stripe Customer, so saved cards work and "Save this card" sticks.
+  const stripeCustomerId = customer ? await ensureStripeCustomer(db, stripe, customer) : null;
   const shipTo = quote.groups.find((g) => g.address)?.address;
   let pi: Stripe.PaymentIntent;
   try {
@@ -109,6 +113,7 @@ async function startPayment(db: Db, stripe: Stripe, settings: CheckoutSettings, 
         amount: quote.totals.totalCents!,
         currency: 'usd',
         automatic_payment_methods: { enabled: true },
+        ...(stripeCustomerId ? { customer: stripeCustomerId } : {}),
         receipt_email: contact.email,
         description: 'GreenLove Farms order',
         metadata: { quoteId: quote._id, holdId, cartId: quote.cartId, environment: process.env.ENVIRONMENT ?? '' },

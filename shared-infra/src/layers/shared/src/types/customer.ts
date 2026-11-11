@@ -31,6 +31,8 @@ export interface Customer {
     marketingEmail: ConsentRecord | null;
     sms: ConsentRecord | null;
   };
+  // Stripe Customer for saved cards; created the first time the shopper reaches payment while signed in.
+  stripeCustomerId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

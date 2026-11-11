@@ -244,13 +244,20 @@ Each route exists for guests (`/checkout/...`, `cartId` in the body) and signed-
    (the shopper can retry); `canceled` releases it.
 6. `GET /checkout/status?paymentIntent=&clientSecret=` — the confirmation page polls until the order exists.
 
+**Saved cards (signed-in only).** The shopper's Stripe Customer is created on first use (`customers.stripeCustomerId`,
+idempotency key per customer). `POST /checkout/me/customer-session` returns a CustomerSession secret for
+`stripe.elements({ customerSessionClientSecret })`: saved cards are shown, a "Save this card" box sets
+`allow_redisplay=always` with `setup_future_usage=on_session` (we never charge a saved card without the shopper), and
+cards can be removed. `/checkout/me/pay` creates the PaymentIntent with `customer`. The account page lists cards marked
+to keep and can remove them (only the shopper's own).
+
 ## 7. Phase 1 endpoints (initial list)
 
 | Stack | Public | Authenticated / Admin |
 |---|---|---|
 | catalog | `GET /products` (`q`, `sort`, `category`, `fulfillmentClass`, `methods`, `minPrice`/`maxPrice` in cents, `inStock`, `page`, `limit`), `GET /products/suggest?q=`, `GET /products/{slug}`, `GET /categories` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`, `GET /admin/categories`, `PUT /admin/categories/{slug}` |
 | carts | `POST /carts/new`, `GET /carts/{cartId}`, `PUT /carts/{cartId}/items`, `DELETE /carts/{cartId}/items/{variantId}`, `PUT /carts/{cartId}/contact`, `POST/GET /carts/{cartId}/views` | Customer: `GET /me/cart`, `PUT /me/cart/items`, `DELETE /me/cart/items/{variantId}`, `POST /me/cart/merge` (also moves guest views), `POST/GET /me/views`, `GET /me/watchlist`, `PUT/DELETE /me/watchlist/{productId}` |
-| checkout | `POST /checkout/quote` (`promoCode` optional), `POST /checkout/pay`, `GET /checkout/status`, `POST /checkout/webhooks/stripe` | Customer: `POST /checkout/me/quote`, `POST /checkout/me/pay` |
+| checkout | `POST /checkout/quote` (`promoCode` optional), `POST /checkout/pay`, `GET /checkout/status`, `POST /checkout/webhooks/stripe` | Customer: `POST /checkout/me/quote`, `POST /checkout/me/pay`, `POST /checkout/me/customer-session`, `GET /checkout/me/payment-methods`, `DELETE /checkout/me/payment-methods/{id}` |
 | promotions | `POST /promotions/check` (throttled) | Staff: `GET/POST /promotions/admin` (`state`, `q`), `GET/PUT /promotions/admin/{id}` (PUT needs `version`; pause/resume/archive via `status`), `GET /promotions/admin/{id}/redemptions` |
 | orders | `GET /orders/track?token=`, `POST /orders/lookup` (both throttled) | Customer: `GET /orders/me`, `GET /orders/me/{ref}`; Staff: `GET /orders/admin` (`deliveryDate`, `method`, `groupStatus`, `status`, `q`, `inventoryShort`), `GET /orders/admin/{ref}`, `PUT /orders/admin/{ref}/groups/{groupId}`, `POST /orders/admin/{ref}/refunds` |
 | auth | `POST /signup`, `/confirm-signup`, `/resend-code`, `/login`, `/refresh`, `/forgot-password`, `/confirm-password` | Customer: `GET/PUT /me`, `GET/POST /me/addresses`, `PUT/DELETE /me/addresses/{id}`; Admin: `POST /admin/users/role` |

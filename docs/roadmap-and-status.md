@@ -66,6 +66,7 @@ Each environment's user can open only its own database, so a dev test can never 
 | 2026-11-09 | Deployed `catalog` and `carts` to prod. Added `scripts/with-db.sh`. `deploy.sh` now accepts `AWS_PROFILE`. |
 | 2026-11-10 | On dev: recently viewed (guest views carry over at login) and saved addresses with ids and a default. Addresses saved earlier get ids the first time they're read. |
 | 2026-11-10 | Catalog on dev: search (Atlas Search, with typo tolerance and synonyms), suggestions, sorting (featured, newest, price), price / delivery-method / in-stock filters, and availability on every product. The shared database connection no longer uses MongoDB's strict API mode, which blocks Atlas Search. Made the first prod admin. |
+| 2026-11-11 | Saved cards on dev (decided: at launch). Signed-in shoppers get a Stripe Customer on first use; `POST /checkout/me/customer-session` returns the CustomerSession secret so the Payment Element shows saved cards, a "Save this card" box (for paying while present only) and a remove option; `/checkout/me/pay` attaches the payment to that Customer; the account page can list and remove cards (`/checkout/me/payment-methods`). Postman: 526 checks, all passing. |
 | 2026-11-11 | Refunds made in the Stripe Dashboard are now recorded on dev: the checkout webhook takes `refund.created` and hands refunds that didn't come from the staff endpoint to the orders stack (`StripeRefundCreated` event), which reverses the tax, updates the order and sends the refund email. Staff refunds are tagged `source=admin` so they're never recorded twice; tax reversals are keyed by refund id. Sandbox webhook now also sends `refund.created`. |
 | 2026-11-11 | Deployed the order emails to prod (`shared-infra`, `checkout`, `orders` updated; `notifications` created). Prod event rule matches only `prod` events; emails link to https://www.greenlove-farms.com. |
 | 2026-11-11 | New `notifications` stack on dev: order confirmation (guests get their private tracking link, account holders a link to the order in their account), status emails (shipped with tracking, ready for pickup, out for delivery, cancelled) and refund notices. Checkout and orders publish `OrderPaid`, `FulfillmentStatusChanged` and `RefundIssued` on the default EventBridge bus (filtered by environment); each email is sent once per order and key; a 15-minute sweep sends any confirmation that didn't go out; reserved test domains (example.com etc.) are never emailed. Existing dev orders were marked as already confirmed. Postman: 515 checks, all passing. |
@@ -103,7 +104,7 @@ Backend items, roughly in order. The full list with details is in the frontend's
 | Carts, merge on login, views, watchlist | carts | ✅ |
 | Remove the Square fields from products | catalog | ✅ dev and prod |
 | Order payment info (`orders.payment`: PaymentIntent, card brand and last 4) | checkout | ✅ dev and prod |
-| Saved cards (`customers.stripeCustomerId`, CustomerSession) | auth, checkout | ⬜ open decision: at launch or soon after |
+| Saved cards at launch: `customers.stripeCustomerId`, `POST /checkout/me/customer-session` for the Payment Element, `GET/DELETE /checkout/me/payment-methods` | checkout | 🟡 on dev, not prod yet |
 | New product fields: `searchTerms`, `shortDescription`, `label` (ingredients, allergens, statement), `storage`, `featuredRank`, `badges`; `netWeight` on each size | catalog | ✅ dev and prod |
 | `GET /categories`, plus staff `GET /admin/categories` and `PUT /admin/categories/{slug}` | catalog | ✅ dev and prod |
 | Product filters and sort: `q` (Atlas Search), `sort`, price range, delivery methods, `inStock` | catalog | ✅ dev and prod |
@@ -138,7 +139,7 @@ Wholesale and restaurant standing orders, corporate juice delivery, farm-stand P
 
 ## Still to do outside the code
 
-- [x] Run the full Postman tests on dev: 515 checks, all passing (2026-11-11). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
+- [x] Run the full Postman tests on dev: 526 checks, all passing (2026-11-11). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
 - [x] Deploy the dev work to prod (2026-11-11): all stacks and indexes.
 - [ ] Create the categories (at least `body-care`) with `PUT /catalog/admin/categories/{slug}`.
 - [ ] Add `/greenlove/prod/cloudinary-url` (needed before uploading product images on prod).
