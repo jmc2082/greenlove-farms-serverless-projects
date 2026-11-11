@@ -493,6 +493,110 @@ Resources:
         EntryPoints: [handlers/me/update.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
 
+  ListAddressesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-list-addresses"
+      CodeUri: src/
+      Handler: handlers/me/addresses/list.handler
+      Description: List the signed-in customer's saved addresses
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /me/addresses
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/addresses/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  CreateAddressFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-create-address"
+      CodeUri: src/
+      Handler: handlers/me/addresses/create.handler
+      Description: Save a new address
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /me/addresses
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/addresses/create.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  UpdateAddressFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-update-address"
+      CodeUri: src/
+      Handler: handlers/me/addresses/update.handler
+      Description: Edit a saved address or make it the default
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /me/addresses/{id}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/addresses/update.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  DeleteAddressFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-delete-address"
+      CodeUri: src/
+      Handler: handlers/me/addresses/delete.handler
+      Description: Delete a saved address
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AuthApi
+            Path: /me/addresses/{id}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/me/addresses/delete.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
   # ── Admin ─────────────────────────────────────────────────────────────────────
   SetRoleFunction:
     Type: AWS::Serverless::Function

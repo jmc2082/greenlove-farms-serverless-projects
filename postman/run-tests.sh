@@ -8,6 +8,7 @@
 # Credentials come from the project .env (never committed):
 #   POSTMAN_TEST_EMAIL / POSTMAN_TEST_PASSWORD    a confirmed customer account (required)
 #   POSTMAN_ADMIN_EMAIL / POSTMAN_ADMIN_PASSWORD  a Staff/Admins account (optional; enables Catalog → Admin)
+#   STRIPE_DEV_PUBLISHABLE_KEY                    lets Checkout pay with Stripe test cards (dev only)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -25,6 +26,9 @@ EMAIL="${POSTMAN_TEST_EMAIL:-$(env_value POSTMAN_TEST_EMAIL)}"
 PASSWORD="${POSTMAN_TEST_PASSWORD:-$(env_value POSTMAN_TEST_PASSWORD)}"
 ADMIN_EMAIL="${POSTMAN_ADMIN_EMAIL:-$(env_value POSTMAN_ADMIN_EMAIL)}"
 ADMIN_PASSWORD="${POSTMAN_ADMIN_PASSWORD:-$(env_value POSTMAN_ADMIN_PASSWORD)}"
+# Publishable (not secret) key: lets Checkout pay with Stripe test cards. Dev only; prod skips payments.
+STRIPE_PK=""
+[ "$ENV_NAME" = dev ] && STRIPE_PK="$(env_value STRIPE_DEV_PUBLISHABLE_KEY)"
 
 if [ -z "$EMAIL" ] || [ -z "$PASSWORD" ]; then
   echo "Set POSTMAN_TEST_EMAIL and POSTMAN_TEST_PASSWORD in .env (a confirmed customer account)." >&2
@@ -36,6 +40,7 @@ FOLDER_ARGS=()
 if [ -n "$FOLDER" ]; then
   FOLDER_ARGS=(--folder Auth --folder "$FOLDER")
   [ "$FOLDER" = Catalog ] && FOLDER_ARGS+=(--folder Teardown)
+  [ "$FOLDER" = Checkout ] && FOLDER_ARGS=(--folder Auth --folder Catalog --folder Checkout --folder Teardown)
 fi
 
 mkdir -p "$HERE/reports"
@@ -46,6 +51,7 @@ npx --yes newman@6 run "$HERE/greenlove-farms.postman_collection.json" \
   --env-var "password=$PASSWORD" \
   --env-var "adminEmail=$ADMIN_EMAIL" \
   --env-var "adminPassword=$ADMIN_PASSWORD" \
+  --env-var "stripePublishableKey=$STRIPE_PK" \
   ${FOLDER_ARGS[@]+"${FOLDER_ARGS[@]}"} \
   --reporters cli,junit \
   --reporter-junit-export "$HERE/reports/$ENV_NAME-$(date +%Y%m%d-%H%M%S).xml"

@@ -2,7 +2,7 @@
 
 Status: draft · 2026-10-27
 
-> **Update 2026-11-09:** payments moved from Square to **Stripe**, and sales tax now uses Stripe Tax. Sections that mention Square (payments, checkout flow, webhooks, `squareItemId` fields) are out of date. See [roadmap-and-status.md](roadmap-and-status.md) for current status and decisions.
+> **Update 2026-11-10:** payments use **Stripe** (Payment Element) and sales tax uses Stripe Tax; Square is gone. The checkout sections below describe the Stripe flow as built. See [roadmap-and-status.md](roadmap-and-status.md) for current status and decisions.
 
 Business rules: `greenlove-farms-nuxtjs/docs/brainstorming-docs/` (Fulfilment Model, Cart/Checkout Scenarios).
 Reference implementation: `event-robin/code/backends/eventrobin-serverless-projects`.
@@ -13,7 +13,7 @@ Reference implementation: `event-robin/code/backends/eventrobin-serverless-proje
 
 - **One Cart → One Checkout → One Payment → One Order → Many Fulfillment Groups.**
 - **The server prices everything.** Nuxt displays totals; the `checkout` stack recomputes products, variants, discounts, delivery, shipping and tax before charging.
-- **Our MongoDB is the system of record** for catalog, orders and (Phase 2) production. Square is the payment/POS system.
+- **Our MongoDB is the system of record** for catalog, orders and (Phase 2) production. Stripe handles payments and sales tax only; products are not mirrored into Stripe.
 - **Model all four fulfillment classes now**, even though Phase 1 only sells `STOCKED` goods plus Tue/Thu delivery and pickup.
 - **Money is integer cents. Times are stored UTC; schedule logic runs in `America/Chicago`.**
 
@@ -25,7 +25,7 @@ Reference implementation: `event-robin/code/backends/eventrobin-serverless-proje
 | API | API Gateway HTTP API per stack, behind one custom domain with base-path mappings |
 | Auth | Cognito (groups: `Customers`, `Staff`, `Admins`); guest checkout allowed |
 | Database | MongoDB Atlas |
-| Payments | Square (Web Payments SDK → Payments API, Orders API, webhooks) |
+| Payments | Stripe: Payment Element in the browser, PaymentIntents created by the server, webhooks create orders. Stripe Tax for sales tax |
 | Images | Cloudinary (signed direct uploads) |
 | Email | AWS SES in the existing OarsLand LLC account (parent company); GreenLove sends from its own verified domain — see §2.1 |
 | Scheduling | EventBridge Scheduler (cutoffs, abandoned-cart sweeps), timezone `America/Chicago` |
@@ -50,7 +50,7 @@ GreenLove Farms LLC is a subsidiary of OarsLand LLC; SES is shared in the OarsLa
 | Stack suffix | none (`greenlove-catalog`) | `-prod` |
 | Mongo database | `greenlove_dev` | `greenlove_prod` |
 | Mongo user | scoped to `greenlove_dev` only | scoped to `greenlove_prod` only |
-| Square | Sandbox | Production |
+| Stripe | Sandbox (test keys) | Live mode |
 | Cloudinary folder | `greenlove/dev/` | `greenlove/prod/` |
 | API domain | `api-dev.greenlove-farms.com` | `api.greenlove-farms.com` |
 
@@ -67,9 +67,9 @@ greenlove-farms-serverless-projects/
   auth/             Cognito pool (emails via SES), groups, post-confirmation links the guest customer record
                     by verified email; /signup never writes to Mongo
   catalog/          products, variants, fulfillment profiles, inventory (+ adjustment log), Cloudinary upload
-                    signing (product images only in Phase 1, so no separate images stack), Square catalog import
+                    signing (product images only in Phase 1, so no separate images stack)
   carts/            server-side carts, product views, watchlist
-  checkout/         quote engine, holds, Square payment, order creation, Square webhooks
+  checkout/         quote engine, stock holds, Stripe PaymentIntents and Tax, order creation (Stripe webhook)
   orders/           order + fulfillment-group reads and admin status changes, guest lookup
   notifications/    SES templates, transactional sends, abandoned-cart sweep
 ```
@@ -136,47 +136,75 @@ Carts never reserve stock. Anonymous cart merges into the customer cart on login
 ### `productViews` (TTL ~90 days) and `watchlist`
 `{ cartId?, customerId?, productId, viewedAt }` · `{ customerId | email, productId, createdAt }`
 
-### `checkoutHolds` (TTL ~15 min)
-Short-lived reservation of inventory (Phase 2: juice slot / crop capacity) between quote and payment. Released on expiry or payment failure via atomic `$inc` on `variants.inventory.held`.
+### `checkoutQuotes` (TTL 1 day; 30 days once paying)
+Every `POST /checkout/quote` saves one: the shopper's inputs (contact, address, method per group, date), the priced
+groups and totals, any `issues`, the Stripe Tax calculation per group, and a `fingerprint` of everything the shopper
+pays for. `/pay` re-prices from the saved inputs and refuses (409 with the new quote) if the fingerprint changed.
+Tax calculations are reused across quotes for the same cart when the inputs are identical.
+
+### `checkoutHolds`
+Stock set aside between "Place order" and the payment result: `inventory.held` is raised per variant (optimistic
+`version` check, all-or-nothing). `HELD` → `COMMITTED` (paid: onHand and held both drop) or `RELEASED`. Not a TTL
+collection: the `sweep-holds` function (every 5 minutes) cancels the abandoned PaymentIntent and gives the stock back
+after `holdMinutes` (30); a hold whose payment is processing or already succeeded is extended instead.
 
 ### `orders`
+Created only by the `payment_intent.succeeded` webhook, so every order is paid. Type: `Order` in the shared layer.
 ```ts
-{ _id, orderNumber: 'GLF-2026-000182', customerId, contact: { fullName, email, phone },
-  status: 'PENDING_PAYMENT' | 'PAID' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED' | 'REFUNDED',
+{ _id, orderNumber: 'GLF-2026-000182', customerId, placedBy: 'GUEST' | 'CUSTOMER',
+  contact: { fullName, email, phone },
+  status: 'PAID' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED' | 'REFUNDED' | 'PARTIALLY_REFUNDED',
   totals: { subtotalCents, discountCents, deliveryCents, shippingCents, taxCents, totalCents },
-  payment: { provider: 'SQUARE', squarePaymentId, squareOrderId, idempotencyKey, status },
+  promoCode?,
+  payment: { provider: 'STRIPE', paymentIntentId (unique), status, amountCents, currency, method?: { type, brand, last4 }, refundedCents },
+  tax: { calculationIds, transactionIds },          // Stripe Tax; transactions are what filing reports use
   fulfillmentGroups: [{
     _id, fulfillmentClass, method: 'SHIP' | 'LOCAL_DELIVERY' | 'PICKUP',
-    status: 'SCHEDULED' | 'IN_PRODUCTION' | 'READY' | 'READY_FOR_LABEL' | 'SHIPPED'
+    status: 'SCHEDULED' | 'PREPARING' | 'IN_PRODUCTION' | 'READY' | 'SHIPPED'
           | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'PICKED_UP' | 'CANCELLED',
-    items: [{ productId, variantId, name, sku, qty, unitPriceCents }],
-    address?, deliveryDate?, estimatedReady?: { from, to }, trackingNumber?, statusHistory: [...]
+    items: [{ productId, variantId, name, variantName, sku, qty, unitPriceCents, discountCents, taxCents, lineTotalCents }],
+    pickupLocation?, address?, deliveryDate?, shipsWithinDays?, feeCents, taxCents,
+    trackingNumber?, trackingUrl?, statusHistory: [{ status, at, by? }]
   }],
-  guestAccessToken (hashed), createdAt, updatedAt }
+  quoteId, cartId, inventory: { committedAt, short }, guestAccessTokenHash, notifications: { confirmationSentAt },
+  createdAt, updatedAt }
 ```
+Guests get a `customers` record keyed by email (`cognitoSub: null`), so signing up later with that email links the orders.
+`inventory.short` flags an order paid after its hold expired when stock ran out meanwhile, for staff to review.
 
 ### Supporting
 - `counters` — `{ _id: 'order-2026', seq }` via `findOneAndUpdate` + `$inc`.
-- `settings` — delivery days, cutoffs (Sun 18:00 → Tue, Tue 18:00 → Thu), zone (77070, 25 mi), fees ($40 minimum / $8.95 under), tax rates.
-- `webhookEvents` — Square event ids processed (dedupe).
+- `settings` — `{ _id: 'checkout' }` overrides the defaults in `checkout/src/lib/settings.ts`: local delivery fee ($8.95, free from $40), delivery-area ZIPs, shipping rate, pickup farms, Stripe tax code per `taxCategory`, hold and quote minutes. The Tue/Thu schedule and cutoffs live in the shared layer's `delivery.ts`.
+- `webhookEvents` — Stripe event ids (dedupe; TTL 30 days).
 - `emailLog` — sends, template, SES message id, bounce/complaint state.
 
 ## 6. Checkout flow
 
-1. `POST /checkout/quote` — cart + contact + method(s) + address → server validates eligibility, geocodes and checks radius, splits into fulfillment groups, computes dates and totals. Returns quote id + breakdown (the "your order ships in parts" view).
-2. Browser tokenizes card with Square Web Payments SDK.
-3. `POST /checkout/pay` — quote id + card token → re-validate, create `checkoutHolds`, create Square Order + Payment (idempotency key = quote id), on success write `orders`, commit inventory, mark cart `CONVERTED`, emit confirmation email. On failure release holds.
-4. `POST /checkout/webhooks/square` — signature-verified; reconciles payment/refund state.
+Each route exists for guests (`/checkout/...`, `cartId` in the body) and signed-in shoppers (`/checkout/me/...`, Cognito JWT).
+
+1. `POST /checkout/quote` — called on every checkout change. Prices the cart from the catalog, splits it into
+   fulfillment groups (one per class; Phase 1 sells only `STOCKED`), offers the methods every item in a group supports,
+   lists upcoming Tue/Thu dates past their cutoffs, adds fees, checks the delivery area, and calls Stripe Tax once every
+   group has an address. Shopper problems come back as `issues` (HTTP 200); `payable` is true when there are none.
+2. The browser mounts the Payment Element with the quote's amount (no PaymentIntent yet).
+3. `POST /checkout/pay { quoteId }` — re-prices; 409 with the new quote if anything changed (or stock ran out).
+   Otherwise holds the stock and creates the PaymentIntent (idempotency key per hold, `metadata.quoteId`/`holdId`),
+   returning `clientSecret`. Repeating the call returns the same open payment.
+4. The browser calls `stripe.confirmPayment()`; Stripe handles 3-D Secure and redirects to the confirmation page.
+5. `POST /checkout/webhooks/stripe` — signature-verified, deduplicated. `payment_intent.succeeded` creates the order,
+   commits the stock, marks the cart `CONVERTED` and records the Stripe Tax transaction. `payment_failed` keeps the hold
+   (the shopper can retry); `canceled` releases it.
+6. `GET /checkout/status?paymentIntent=&clientSecret=` — the confirmation page polls until the order exists.
 
 ## 7. Phase 1 endpoints (initial list)
 
 | Stack | Public | Authenticated / Admin |
 |---|---|---|
-| catalog | `GET /products`, `GET /products/{slug}`, `GET /categories` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`, `GET /admin/categories`, `PUT /admin/categories/{slug}` |
-| carts | `POST /carts/new`, `GET /carts/{cartId}`, `PUT /carts/{cartId}/items`, `DELETE /carts/{cartId}/items/{variantId}`, `PUT /carts/{cartId}/contact`, `POST /carts/{cartId}/views` | Customer: `GET /me/cart`, `PUT /me/cart/items`, `DELETE /me/cart/items/{variantId}`, `POST /me/cart/merge`, `POST /me/views`, `GET /me/watchlist`, `PUT/DELETE /me/watchlist/{productId}` |
-| checkout | `POST /checkout/quote`, `POST /checkout/pay`, `POST /checkout/webhooks/square` | — |
+| catalog | `GET /products` (`q`, `sort`, `category`, `fulfillmentClass`, `methods`, `minPrice`/`maxPrice` in cents, `inStock`, `page`, `limit`), `GET /products/suggest?q=`, `GET /products/{slug}`, `GET /categories` | Staff: `GET/POST /admin/products`, `GET/PUT /admin/products/{id}` (PUT needs `version`), `POST /admin/products/{id}/inventory`, `POST /admin/images/sign`, `GET /admin/categories`, `PUT /admin/categories/{slug}` |
+| carts | `POST /carts/new`, `GET /carts/{cartId}`, `PUT /carts/{cartId}/items`, `DELETE /carts/{cartId}/items/{variantId}`, `PUT /carts/{cartId}/contact`, `POST/GET /carts/{cartId}/views` | Customer: `GET /me/cart`, `PUT /me/cart/items`, `DELETE /me/cart/items/{variantId}`, `POST /me/cart/merge` (also moves guest views), `POST/GET /me/views`, `GET /me/watchlist`, `PUT/DELETE /me/watchlist/{productId}` |
+| checkout | `POST /checkout/quote`, `POST /checkout/pay`, `GET /checkout/status`, `POST /checkout/webhooks/stripe` | Customer: `POST /checkout/me/quote`, `POST /checkout/me/pay` |
 | orders | `GET /orders/lookup?token=` | Customer: `GET /me/orders`; Admin: list/filter by delivery day, update fulfillment-group status, refund |
-| auth | `POST /signup`, `/confirm-signup`, `/resend-code`, `/login`, `/refresh`, `/forgot-password`, `/confirm-password` | Customer: `GET/PUT /me`; Admin: `POST /admin/users/role` |
+| auth | `POST /signup`, `/confirm-signup`, `/resend-code`, `/login`, `/refresh`, `/forgot-password`, `/confirm-password` | Customer: `GET/PUT /me`, `GET/POST /me/addresses`, `PUT/DELETE /me/addresses/{id}`; Admin: `POST /admin/users/role` |
 | notifications | — | internal only (invoked by other stacks / scheduler) |
 
 ## 8. Frontend integration (greenlove-farms-nuxtjs)

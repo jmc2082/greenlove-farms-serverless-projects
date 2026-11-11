@@ -1,40 +1,46 @@
 import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { Filter } from 'mongodb';
-import { getDb, ok, badRequest, serverError, Product, FULFILLMENT_CLASSES, FulfillmentClass, toPublicProduct } from '@greenlove/shared';
+import { getDb, ok, badRequest, serverError, Product, toPublicProduct } from '@greenlove/shared';
+import { parseProductQuery, buildFilter, buildSearchStage, sortSpec, inStockMatch } from '../../lib/product-query';
 
-const DEFAULT_LIMIT = 24;
-const MAX_LIMIT = 100;
-
+// Shop grid and search results. With `q` the results come from Atlas Search, ranked by relevance unless a sort is given.
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
-  const q = event.queryStringParameters ?? {};
-
-  const page = Math.max(1, parseInt(q['page'] ?? '1', 10) || 1);
-  const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(q['limit'] ?? `${DEFAULT_LIMIT}`, 10) || DEFAULT_LIMIT));
-
-  const filter: Filter<Product> = { status: 'ACTIVE' };
-  if (q['category']) filter.category = q['category'];
-  if (q['fulfillmentClass']) {
-    if (!FULFILLMENT_CLASSES.includes(q['fulfillmentClass'] as FulfillmentClass)) {
-      return badRequest(`fulfillmentClass must be one of: ${FULFILLMENT_CLASSES.join(', ')}`);
-    }
-    filter.fulfillmentClass = q['fulfillmentClass'] as FulfillmentClass;
-  }
+  const { query, error } = parseProductQuery(event.queryStringParameters ?? {});
+  if (error) return badRequest(error);
+  const { page, limit, sort } = query!;
+  const skip = (page - 1) * limit;
 
   try {
-    const db = await getDb();
-    const col = db.collection<Product>('products');
+    const col = (await getDb()).collection<Product>('products');
+    let items: Product[];
+    let total: number;
 
-    const [items, total] = await Promise.all([
-      col.find(filter).sort({ name: 1 }).skip((page - 1) * limit).limit(limit).toArray(),
-      col.countDocuments(filter),
-    ]);
+    if (query!.q) {
+      const sortStage = sort === 'relevance' ? [] : [{ $sort: sortSpec(sort) }];
+      const [result] = await col
+        .aggregate<{ items: Product[]; total: { n: number }[] }>([
+          buildSearchStage(query!),
+          ...inStockMatch(query!),
+          { $facet: { items: [...sortStage, { $skip: skip }, { $limit: limit }], total: [{ $count: 'n' }] } },
+        ])
+        .toArray();
+      items = result?.items ?? [];
+      total = result?.total[0]?.n ?? 0;
+    } else {
+      const filter = buildFilter(query!);
+      [items, total] = await Promise.all([
+        col.find(filter).sort(sortSpec(sort)).skip(skip).limit(limit).toArray(),
+        col.countDocuments(filter),
+      ]);
+    }
 
+    const now = new Date();
     return ok({
-      items: items.map(toPublicProduct),
+      items: items.map((p) => toPublicProduct(p, now)),
       page,
       limit,
       total,
       totalPages: Math.ceil(total / limit),
+      sort,
     });
   } catch (err) {
     console.error('list-products error', err);

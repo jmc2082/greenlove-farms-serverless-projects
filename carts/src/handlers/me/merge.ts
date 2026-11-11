@@ -2,10 +2,11 @@ import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from
 import { getDb, ok, badRequest, notFound, serverError, CART_LIMITS, CartItem, cartExpiry } from '@greenlove/shared';
 import { carts, getCustomerId, getOrCreateCustomerCart } from '../../lib/cart-access';
 import { toCartView } from '../../lib/cart-view';
+import { mergeViews } from '../../lib/product-views';
 
 // POST /me/cart/merge — body { cartId }. Call right after login with the browser's anonymous cartId.
 // If the customer has no active cart, the anonymous cart is simply claimed; otherwise its lines are folded in
-// (quantities summed, capped) and the anonymous cart is marked MERGED. Idempotent.
+// (quantities summed, capped) and the anonymous cart is marked MERGED. Its product views move to the customer too. Idempotent.
 export const handler = async (event: APIGatewayProxyEventV2WithJWTAuthorizer): Promise<APIGatewayProxyResultV2> => {
   let body: { cartId?: string };
   try {
@@ -22,6 +23,7 @@ export const handler = async (event: APIGatewayProxyEventV2WithJWTAuthorizer): P
 
     const anon = await carts(db).findOne({ _id: body.cartId, customerId: null, status: 'ACTIVE' });
     const now = new Date();
+    if (anon) await mergeViews(db, anon._id, customerId);
 
     if (anon && !(await carts(db).findOne({ customerId, status: 'ACTIVE' }, { projection: { _id: 1 } }))) {
       try {

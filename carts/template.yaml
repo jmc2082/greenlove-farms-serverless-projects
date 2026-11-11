@@ -321,6 +321,40 @@ Resources:
         EntryPoints: [handlers/views/record.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
 
+  ListViewsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-list-views"
+      CodeUri: src/
+      Handler: handlers/views/list.handler
+      Description: Recently viewed products (per cart or customer)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /{cartId}/views
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        SignedIn1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CartsApi
+            Path: /me/views
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/views/list.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
   ListWatchlistFunction:
     Type: AWS::Serverless::Function
     Properties:

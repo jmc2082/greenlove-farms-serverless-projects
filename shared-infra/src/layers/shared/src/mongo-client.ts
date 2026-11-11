@@ -19,7 +19,8 @@ export async function getDb(): Promise<Db> {
   const client = new MongoClient(await resolveUri(), {
     serverApi: {
       version: ServerApiVersion.v1,
-      strict: true,
+      // Not strict: Atlas Search ($search, search index commands) is outside the Stable API and is refused in strict mode.
+      strict: false,
       deprecationErrors: true,
     },
     maxPoolSize: 1,

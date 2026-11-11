@@ -1,6 +1,8 @@
 import { ObjectId } from 'mongodb';
 
 export interface CustomerAddress {
+  _id?: ObjectId;      // set on every address saved since 2026-11-10; older ones get one on next read
+  isDefault?: boolean; // exactly one saved address is the default
   label?: string;
   line1: string;
   line2?: string;

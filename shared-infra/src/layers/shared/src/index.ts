@@ -5,4 +5,7 @@ export * from './jwt-verify';
 export * from './types/catalog';
 export * from './types/customer';
 export * from './types/cart';
+export * from './types/order';
 export * from './views/product';
+export * from './views/order';
+export * from './delivery';

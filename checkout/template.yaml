@@ -1,0 +1,278 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Checkout Stack (quote, Stripe payment, webhook, order creation)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  MongoDbName:
+    Type: String
+    Default: greenlove_dev
+  SharedLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/shared-layer-arn
+  ApiDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/api-domain-name
+  UserPoolId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/user-pool-id
+  UserPoolClientId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/client-id
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    MemorySize: 256
+    Timeout: 15
+    Architectures:
+      - arm64
+    Layers:
+      - !Ref SharedLayerArn
+    Environment:
+      Variables:
+        MONGODB_URI_PARAM: !Sub "/greenlove/${Environment}/mongodb-uri"
+        MONGODB_DB_NAME: !Ref MongoDbName
+        ENVIRONMENT: !Ref Environment
+        SERVICE_VERSION: "0.1.0"
+
+Resources:
+
+  # ── HTTP API ──────────────────────────────────────────────────────────────────
+  CheckoutApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: GreenLove Checkout API
+      Auth:
+        DefaultAuthorizer: CognitoJWT
+        Authorizers:
+          CognitoJWT:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}"
+              audience:
+                - !Ref UserPoolClientId
+            IdentitySource: "$request.header.Authorization"
+      CorsConfiguration:
+        AllowMethods: ["GET", "POST", "OPTIONS"]
+        AllowHeaders: ["Content-Type", "Authorization"]
+        AllowOrigins: !Ref AllowedOrigins
+        MaxAge: 600
+      # Each quote can call Stripe Tax: keep bursts from one bad client in check.
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 25
+
+  # Served at https://<ApiDomainName>/checkout/...
+  CheckoutApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref ApiDomainName
+      ApiId: !Ref CheckoutApi
+      Stage: !Ref CheckoutApi.Stage
+      ApiMappingKey: checkout
+
+  # ── Health ────────────────────────────────────────────────────────────────────
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-health"
+      CodeUri: src/
+      Handler: handlers/health/index.handler
+      Description: Checkout service health check
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/health/index.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Checkout (guest routes take cartId in the body; /me routes use the Cognito JWT) ──
+  QuoteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-quote"
+      CodeUri: src/
+      Handler: handlers/quote.handler
+      Description: Price the cart, fulfillment dates, fees and sales tax
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /quote
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        Customer1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /me/quote
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/quote.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  PayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-pay"
+      CodeUri: src/
+      Handler: handlers/pay.handler
+      Description: Re-price, hold stock and create the Stripe PaymentIntent
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /pay
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        Customer1:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /me/pay
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/pay.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  StatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-status"
+      CodeUri: src/
+      Handler: handlers/status.handler
+      Description: Payment and order status for the confirmation page
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /status
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/status.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Stripe webhook (signature-verified; creates orders) ──────────────────────
+  StripeWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-stripe-webhook"
+      CodeUri: src/
+      Handler: handlers/webhook.handler
+      Description: Stripe events (create orders, record failures, release holds)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-webhook-secret"
+      Events:
+        Public0:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CheckoutApi
+            Path: /webhooks/stripe
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/webhook.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Scheduled ─────────────────────────────────────────────────────────────────
+  SweepHoldsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-sweep-holds"
+      CodeUri: src/
+      Handler: handlers/sweep-holds.handler
+      Description: Release stock held for abandoned payments
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
+      Events:
+        Every5Minutes:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(5 minutes)
+            Description: Release expired checkout holds
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/sweep-holds.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+Outputs:
+  CheckoutApiUrl:
+    Description: Checkout API (direct execute-api URL; the public one is https://<ApiDomainName>/checkout)
+    Value: !Sub "https://${CheckoutApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"

@@ -1,6 +1,6 @@
 # Backend roadmap and status
 
-Last updated: 2026-11-09
+Last updated: 2026-11-10
 
 This page tracks what the backend has, what's deployed where, and what's next. For how the system is designed, see [architecture.md](architecture.md). The website's plan (pages, checkout screens, build order) lives in the frontend repo: `greenlove-farms-nuxtjs/docs/product-roadmap/` (start with `phases.md` and `ecommerce-spec.md`).
 
@@ -12,7 +12,8 @@ Status key: ✅ done · 🟡 in progress · ⬜ not started
 
 - **Customer accounts work on both dev and prod.** Sign-up, email code, login, token refresh, password reset and `/me` all run on Cognito. The website was switched over to them on 2026-11-09.
 - **Catalog and carts are deployed on both environments.** The prod catalog is empty, which is expected because no products have been added yet.
-- **Checkout, orders and emails don't exist yet.** These are the next stacks, and online ordering can't open until they're done.
+- **Checkout works on dev with Stripe test payments.** A paid checkout creates the order, takes the stock and records the sale in Stripe Tax. Orders (history, tracking, refunds), confirmation emails and promo codes are still to come, and online ordering can't open until they're done.
+- **Sales tax is $0 for now.** Stripe Tax is set up, but no state registration exists yet, so it calculates tax and collects none. Register Texas before launch (see "Still to do outside the code"); no code change is needed when that happens.
 - **Payments moved from Square to Stripe.** [architecture.md](architecture.md) still describes Square in several places. Where the two disagree, this page and the frontend's `ecommerce-spec.md` are current.
 
 ### Deployed stacks
@@ -24,7 +25,7 @@ Status key: ✅ done · 🟡 in progress · ⬜ not started
 | `auth` | ✅ | ✅ | `https://api[-dev].greenlove-farms.com/auth` |
 | `catalog` | ✅ | ✅ (2026-11-09) | `.../catalog` |
 | `carts` | ✅ | ✅ (2026-11-09) | `.../carts` |
-| `checkout` | ⬜ | ⬜ | |
+| `checkout` | ✅ (2026-11-10) | ⬜ | `.../checkout` |
 | `orders` | ⬜ | ⬜ | |
 | `notifications` | ⬜ | ⬜ | |
 
@@ -37,7 +38,7 @@ Prod health checks (`/auth/health`, `/catalog/health`, `/carts/health`) all retu
 | Database | `greenlove_dev` | `greenlove_prod` |
 | Atlas user | `greenlove_dev_user` (readWrite on `greenlove_dev` only) | `greenlove_prod_user` (readWrite on `greenlove_prod` only) |
 | Connection string | SSM `/greenlove/dev/mongodb-uri` | SSM `/greenlove/prod/mongodb-uri` |
-| Indexes | ✅ auth, catalog (incl. categories), carts | ✅ auth, catalog, carts (categories: not yet) |
+| Indexes | ✅ auth, catalog (incl. categories), carts, checkout | ✅ auth, catalog, carts (categories and checkout: not yet) |
 
 Each environment's user can open only its own database, so a dev test can never change prod data.
 
@@ -47,6 +48,7 @@ Each environment's user can open only its own database, so a dev test can never 
 |---|---|---|
 | `mongodb-uri` | ✅ | ✅ |
 | `cloudinary-url` | ✅ | ⬜ **needed before uploading product images on prod** |
+| `stripe-secret-key`, `stripe-webhook-secret` | ✅ (sandbox) | ⬜ live keys, then `./scripts/put-stripe-secrets.sh prod` |
 | Cognito ids, SES senders and config sets, layer ARN, API domain | ✅ (created by the stacks) | ✅ |
 
 ---
@@ -61,6 +63,9 @@ Each environment's user can open only its own database, so a dev test can never 
 | 2026-11-09 | Website switched to Cognito accounts. Decided on Stripe instead of Square, Stripe Tax, promo codes, and Atlas Search for product search. |
 | 2026-11-09 | Fixed prod sign-up: confirming the email code returned a 500 error because the prod database connection string was missing from SSM. Added separate Atlas users for dev and prod, created the prod indexes, and restored the customer record for the first prod account. |
 | 2026-11-09 | Deployed `catalog` and `carts` to prod. Added `scripts/with-db.sh`. `deploy.sh` now accepts `AWS_PROFILE`. |
+| 2026-11-10 | On dev: recently viewed (guest views carry over at login) and saved addresses with ids and a default. Addresses saved earlier get ids the first time they're read. |
+| 2026-11-10 | Catalog on dev: search (Atlas Search, with typo tolerance and synonyms), suggestions, sorting (featured, newest, price), price / delivery-method / in-stock filters, and availability on every product. The shared database connection no longer uses MongoDB's strict API mode, which blocks Atlas Search. Made the first prod admin. |
+| 2026-11-10 | New `checkout` stack on dev: quote (pricing, fulfillment groups, Tue/Thu dates, delivery and shipping fees, delivery-area check, Stripe Tax), pay (re-price, hold stock, create the PaymentIntent), Stripe webhook (creates the order, takes the stock, records the tax transaction), payment status, and a 5-minute sweep that releases stock from abandoned payments. Tested with Stripe test cards: success, decline then retry, changed cart, abandoned payment. Postman covers guest and signed-in checkout (332 checks). Stripe sandbox connected: keys and webhook secret in SSM (`scripts/put-stripe-secrets.sh`), webhook registered. |
 | 2026-11-09 | Catalog on dev: removed the Square fields, added the new product fields and the categories endpoints. Active cosmetic, cottage-food and TCS products now need ingredients on their label. |
 
 ---
@@ -90,16 +95,20 @@ Backend items, roughly in order. The full list with details is in the frontend's
 | Product reads, staff product management, inventory, image upload signing | catalog | ✅ |
 | Carts, merge on login, views, watchlist | carts | ✅ |
 | Remove the Square fields from products | catalog | 🟡 on dev, not prod yet |
-| Add Stripe fields (`customers.stripeCustomerId`, order payment info) | auth, checkout | ⬜ |
+| Order payment info (`orders.payment`: PaymentIntent, card brand and last 4) | checkout | 🟡 on dev, not prod yet |
+| Saved cards (`customers.stripeCustomerId`, CustomerSession) | auth, checkout | ⬜ open decision: at launch or soon after |
 | New product fields: `searchTerms`, `shortDescription`, `label` (ingredients, allergens, statement), `storage`, `featuredRank`, `badges`; `netWeight` on each size | catalog | 🟡 on dev, not prod yet |
 | `GET /categories`, plus staff `GET /admin/categories` and `PUT /admin/categories/{slug}` | catalog | 🟡 on dev, not prod yet |
-| Product filters and sort: `q` (Atlas Search), `sort`, price range, delivery methods | catalog | ⬜ |
-| `GET /products/suggest?q=` | catalog | ⬜ |
-| Public availability for each product (ready dates, next delivery, how many are left) | catalog | ⬜ |
-| Recently viewed: `GET /carts/{cartId}/views`, `GET /me/views` | carts | ⬜ |
-| Saved addresses: `/me/addresses` | auth | ⬜ |
-| **Checkout:** quote, pay (create the PaymentIntent), Stripe webhook, status | checkout (new) | ⬜ |
-| **Stripe Tax** in the quote, recorded on payment, reversed on refund | checkout | ⬜ |
+| Product filters and sort: `q` (Atlas Search), `sort`, price range, delivery methods, `inStock` | catalog | 🟡 on dev, not prod yet |
+| `GET /products/suggest?q=` | catalog | 🟡 on dev, not prod yet |
+| Public availability for each product: stock status, how many are left, next delivery or pickup date and its order-by time, days to ship | catalog | 🟡 on dev, not prod yet |
+| ZIP check (`zip=`) and "ready by" filter (`readyBy=`) | catalog | ⬜ deferred: ZIP needs a delivery-area lookup; "ready by" matters once grown and made-to-order products are sold (Phase 2) |
+| Recently viewed: `GET /carts/{cartId}/views`, `GET /me/views` (`limit`, `exclude`); a guest's views move to the account when the cart merges at login | carts | 🟡 on dev, not prod yet |
+| Saved addresses: `GET/POST /me/addresses`, `PUT/DELETE /me/addresses/{id}`, with ids and one default address | auth | 🟡 on dev, not prod yet |
+| **Checkout:** quote, pay (create the PaymentIntent), Stripe webhook, status | checkout (new) | 🟡 on dev, not prod yet |
+| **Stripe Tax** in the quote and recorded on payment | checkout | 🟡 on dev (collects $0 until a state is registered) |
+| Stripe Tax reversal on refund | orders | ⬜ with refunds |
+| Checkout settings to confirm: shipping rate (placeholder $7.95 flat), delivery-area ZIPs (placeholder: starts with 770, 773 or 774), farm pickup addresses (placeholder ZIPs 77070 and 77301), Stripe tax code per `taxCategory` (all "general" for now). Change them in the `settings` document `{ _id: 'checkout' }`; defaults are in `checkout/src/lib/settings.ts`. | data | ⬜ |
 | **Promo codes:** collections, admin create/edit, `POST /promotions/check`, applied in the quote | checkout or a new stack | ⬜ |
 | **Orders:** `/me/orders`, guest tracking link, staff status changes, refunds | orders (new) | ⬜ |
 | **Emails:** order confirmation, status updates, guest tracking link | notifications (new) | ⬜ |
@@ -121,15 +130,17 @@ Wholesale and restaurant standing orders, corporate juice delivery, farm-stand P
 
 ## Still to do outside the code
 
-- [ ] Run the full Postman tests on dev. They need `POSTMAN_TEST_EMAIL` / `POSTMAN_TEST_PASSWORD` (a confirmed customer) and, for the admin and category tests, `POSTMAN_ADMIN_EMAIL` / `POSTMAN_ADMIN_PASSWORD` (a Staff or Admins user) in `.env`.
-- [ ] Deploy the catalog changes to prod: `AWS_PROFILE=jmplutouser2 ./deploy.sh prod shared-infra catalog carts`, then `./scripts/with-db.sh prod -- npm --prefix catalog run indexes`.
+- [x] Run the full Postman tests on dev: 360 checks, all passing (2026-11-10). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
+- [ ] Deploy the dev work to prod: `AWS_PROFILE=jmplutouser2 ./deploy.sh prod shared-infra auth catalog carts checkout`, then run the `catalog`, `carts` and `checkout` index scripts on prod (`./scripts/with-db.sh prod -- npm --prefix catalog run indexes`, same with `carts`). That script also creates the `products_search` Atlas Search index, which Atlas takes about a minute to build.
 - [ ] Create the categories (at least `body-care`) with `PUT /catalog/admin/categories/{slug}`.
 - [ ] Add `/greenlove/prod/cloudinary-url` (needed before uploading product images on prod).
 - [ ] Change the `oars_admin_user` Atlas password (it was exposed). Dev and prod no longer use that user.
 - [ ] Optionally change the `greenlove_dev_user` and `greenlove_prod_user` passwords and save the new ones with `put-parameter --overwrite`.
-- [ ] Create a Stripe account (test mode first), then store its keys in SSM, for example `/greenlove/{env}/stripe-secret-key` and `/greenlove/{env}/stripe-webhook-secret`.
-- [ ] Turn on Stripe Tax and register for Texas sales tax. Confirm with an accountant how food, juice and cosmetics are taxed.
-- [ ] Make the first prod admin: add your account to the `Admins` group (command in the README).
+- [x] Stripe sandbox: keys in dev SSM, webhook registered for `https://api-dev.greenlove-farms.com/checkout/webhooks/stripe` (done 2026-11-10).
+- [ ] Stripe live mode before launch: register the prod webhook (`https://api.greenlove-farms.com/checkout/webhooks/stripe`, events `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`), put its signing secret and the live secret key in `.env`, then run `./scripts/put-stripe-secrets.sh prod`. Set the public business name and card-statement name to GreenLove Farms (Settings → Business → Public details).
+- [ ] **Register for Texas sales tax** with the Texas Comptroller, then add the registration in Stripe (More → Tax → Registrations), first in the sandbox to test, then in live mode. Until then Stripe Tax collects $0. Confirm with an accountant how food, juice and cosmetics are taxed, and whether delivery fees are taxable.
+- [ ] Stripe Tax's preset product category is "General - Electronically Supplied Services". Checkout sends a tax code with every line, so it isn't used, but change it to "General - Tangible Goods" so Dashboard-created charges match.
+- [x] Make the first prod admin (done 2026-11-10).
 - [ ] Confirm SES is out of the sandbox in us-east-2 so emails can reach any customer.
 
 ## Suggested hardening

@@ -108,7 +108,7 @@ Resources:
       FunctionName: !Sub "${AWS::StackName}-list-products"
       CodeUri: src/
       Handler: handlers/products/list.handler
-      Description: List active products (paginated, filter by category / fulfillment class)
+      Description: List and search active products (filters, sort, paging)
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
@@ -156,6 +156,34 @@ Resources:
         Target: es2022
         Sourcemap: true
         EntryPoints: [handlers/products/get.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  SuggestProductsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-suggest-products"
+      CodeUri: src/
+      Handler: handlers/products/suggest.handler
+      Description: Search-as-you-type product and category suggestions (Atlas Search)
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CatalogApi
+            Path: /products/suggest
+            Method: GET
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/products/suggest.ts]
         External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
 
   # ── Categories (public) ───────────────────────────────────────────────────────

@@ -68,6 +68,7 @@ export interface Product {
   taxCategory: string;
   images: ProductImage[];
   variants: ProductVariant[];
+  priceFromCents?: number; // lowest variant price, kept in step on every write (for price sort and filters)
   // Bumped by every write that touches variants (edits, inventory, checkout holds) for optimistic concurrency.
   version: number;
   createdAt: Date;

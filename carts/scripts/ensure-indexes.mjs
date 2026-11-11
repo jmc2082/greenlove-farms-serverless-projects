@@ -21,6 +21,9 @@ try {
     { key: { expiresAt: 1 }, name: 'expires_ttl', expireAfterSeconds: 0 },
     { key: { cartId: 1, productId: 1 }, name: 'cart_product_unique', unique: true, partialFilterExpression: { cartId: { $type: 'string' } } },
     { key: { customerId: 1, productId: 1 }, name: 'customer_product_unique', unique: true, partialFilterExpression: { customerId: { $type: 'objectId' } } },
+    // Recently viewed, newest first.
+    { key: { cartId: 1, lastViewedAt: -1 }, name: 'cart_recent', partialFilterExpression: { cartId: { $type: 'string' } } },
+    { key: { customerId: 1, lastViewedAt: -1 }, name: 'customer_recent', partialFilterExpression: { customerId: { $type: 'objectId' } } },
   ]);
   await db.collection('watchlist').createIndexes([
     { key: { customerId: 1, productId: 1 }, name: 'customer_product_unique', unique: true },

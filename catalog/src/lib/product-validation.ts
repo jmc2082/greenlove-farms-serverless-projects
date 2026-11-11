@@ -20,6 +20,8 @@ import {
 export type ProductFields = Omit<Product, '_id' | 'version' | 'createdAt' | 'updatedAt'>;
 
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+// Static routes under /products that a product slug must not shadow.
+const RESERVED_SLUGS = new Set(['suggest']);
 const SKU = /^[A-Z0-9][A-Z0-9-]{1,39}$/;
 const MAX_VARIANTS = 20;
 const MAX_IMAGES = 10;
@@ -92,6 +94,7 @@ export function validateProduct(
 
   const slug = raw['slug'] === undefined || raw['slug'] === '' ? slugify(name) : text(raw['slug'], 80);
   if (!SLUG.test(slug)) errors['slug'] = 'lowercase letters, numbers and single hyphens';
+  else if (RESERVED_SLUGS.has(slug)) errors['slug'] = `"${slug}" is reserved`;
 
   const description = text(raw['description'], 5000);
   const shortDescription = text(raw['shortDescription'], 160);
@@ -278,6 +281,7 @@ export function validateProduct(
       taxCategory,
       images,
       variants,
+      priceFromCents: Math.min(...variants.map((v) => v.priceCents)),
     },
   };
 }

@@ -160,6 +160,38 @@ const auth = folder('Auth', [
     ],
   }),
   req('Update profile (bad phone)', 'PUT', '/auth/me', { body: { phone: '123' }, tests: [status(400), errorBody] }),
+  folder('Addresses', [
+    req('List addresses', 'GET', '/auth/me/addresses', {
+      description: 'Default first. Each address has an id for editing.',
+      tests: [
+        status(200),
+        'const r = pm.response.json();',
+        "pm.test('one default, with ids', () => { pm.expect(r.items.filter((a) => a.isDefault)).to.have.lengthOf(1); r.items.forEach((a) => pm.expect(a.id).to.be.a('string')); });",
+        set('homeAddressId', 'r.items[0].id'),
+      ],
+    }),
+    req('Add address (as default)', 'POST', '/auth/me/addresses', {
+      body: { label: 'Work', line1: '500 Main St', city: 'Houston', state: 'TX', zip: '77002', isDefault: true },
+      tests: [status(201), 'const a = pm.response.json();', "pm.test('is default', () => pm.expect(a.isDefault).to.be.true);", set('addressId', 'a.id')],
+    }),
+    req('Add address (bad zip)', 'POST', '/auth/me/addresses', { body: { line1: '1 A St', city: 'Houston', state: 'TX', zip: '7700' }, tests: [status(400), errorBody] }),
+    req('Edit address', 'PUT', '/auth/me/addresses/{{addressId}}', {
+      body: { line2: 'Suite 200', deliveryInstructions: 'Front desk' },
+      description: 'Partial: only the fields sent change.',
+      tests: [status(200), 'const a = pm.response.json();', "pm.test('edited, rest kept', () => { pm.expect(a.line2).to.eql('Suite 200'); pm.expect(a.line1).to.eql('500 Main St'); });"],
+    }),
+    req('Make first address default', 'PUT', '/auth/me/addresses/{{homeAddressId}}', { body: { isDefault: true }, tests: [status(200), "pm.test('is default', () => pm.expect(pm.response.json().isDefault).to.be.true);"] }),
+    req('List addresses (default moved)', 'GET', '/auth/me/addresses', {
+      tests: [
+        status(200),
+        'const r = pm.response.json();',
+        "pm.test('first is default, work is not', () => { pm.expect(r.items[0].id).to.eql(pm.environment.get('homeAddressId')); pm.expect(r.items.find((a) => a.id === pm.environment.get('addressId')).isDefault).to.be.false; });",
+      ],
+    }),
+    req('Edit address (unknown id)', 'PUT', '/auth/me/addresses/000000000000000000000000', { body: { city: 'Katy' }, tests: [status(404), errorBody] }),
+    req('Delete address', 'DELETE', '/auth/me/addresses/{{addressId}}', { tests: [status(204)] }),
+    req('Delete address (again)', 'DELETE', '/auth/me/addresses/{{addressId}}', { tests: [status(404)] }),
+  ]),
   req('Admin login', 'POST', '/auth/login', {
     auth: NOAUTH,
     pre: NEEDS_ADMIN,
@@ -290,14 +322,38 @@ const catalog = folder('Catalog', [
       status(200),
       'const r = pm.response.json();',
       "pm.test('paged list', () => { pm.expect(r.items).to.be.an('array'); pm.expect(r.total).to.be.a('number'); });",
-      '// Without the admin-created test product, fall back to any live product for the cart tests.',
-      "if (!pm.environment.get('testProductCreated') && r.items[0]) {",
-      `  ${set('productId', 'r.items[0].id')}`,
-      `  ${set('productSlug', 'r.items[0].slug')}`,
-      `  ${set('variantId', 'r.items[0].variants[0].id')}`,
+      '// Without the admin-created test product, fall back to a live product with stock for the cart and checkout tests.',
+      "const live = r.items.map((p) => ({ p, v: p.variants.find((v) => v.available === null || v.available > 2) })).find((x) => x.v);",
+      "if (!pm.environment.get('testProductCreated') && live) {",
+      `  ${set('productId', 'live.p.id')}`,
+      `  ${set('productSlug', 'live.p.slug')}`,
+      `  ${set('variantId', 'live.v.id')}`,
       '}',
     ],
   }),
+  req('List products (sorted, filtered)', 'GET', '/catalog/products', {
+    auth: NOAUTH,
+    query: [q('sort', 'price_asc', false, 'featured (default) | newest | price_asc | price_desc | relevance (needs q)'), q('methods', 'SHIP', false, 'Comma-separated: SHIP, LOCAL_DELIVERY, PICKUP'), q('minPrice', '0', false, 'Cents'), q('maxPrice', '100000', false, 'Cents'), q('inStock', 'true', true)],
+    tests: [
+      status(200),
+      'const r = pm.response.json();',
+      "pm.test('sorted by price', () => { const p = r.items.map((i) => i.priceFromCents); pm.expect(p).to.eql([...p].sort((a, b) => a - b)); });",
+      "pm.test('all ship', () => r.items.forEach((i) => pm.expect(i.fulfillmentProfile.methods).to.include('SHIP')));",
+      "pm.test('availability shape', () => r.items.forEach((i) => pm.expect(i.availability).to.have.property('status')));",
+    ],
+  }),
+  req('Search products', 'GET', '/catalog/products', {
+    auth: NOAUTH,
+    query: [q('q', 'soap', false, 'Atlas Search: name, synonyms (searchTerms) and descriptions; forgives one typo')],
+    tests: [status(200), "pm.test('paged list', () => pm.expect(pm.response.json().items).to.be.an('array'));", "pm.test('relevance sort', () => pm.expect(pm.response.json().sort).to.eql('relevance'));"],
+  }),
+  req('Suggest products', 'GET', '/catalog/products/suggest', {
+    auth: NOAUTH,
+    query: [q('q', 'so')],
+    tests: [status(200), 'const r = pm.response.json();', "pm.test('shape', () => { pm.expect(r.products).to.be.an('array'); pm.expect(r.categories).to.be.an('array'); });"],
+  }),
+  req('Suggest products (too short)', 'GET', '/catalog/products/suggest', { auth: NOAUTH, query: [q('q', 's')], tests: [status(400), errorBody] }),
+  req('List products (bad sort)', 'GET', '/catalog/products', { auth: NOAUTH, query: [q('sort', 'relevance')], tests: [status(400), errorBody] }),
   req('List products (bad filter)', 'GET', '/catalog/products', {
     auth: NOAUTH,
     query: [q('fulfillmentClass', 'NOPE')],
@@ -346,6 +402,10 @@ const carts = folder('Carts', [
       tests: [status(200), ...cartShape],
     }),
     req('Record view', 'POST', '/carts/{{cartId}}/views', { pre: NEEDS_PRODUCT, body: { productId: '{{productId}}' }, tests: [status(204)] }),
+    req('List views', 'GET', '/carts/{{cartId}}/views', { pre: NEEDS_PRODUCT,
+      query: [q('limit', '12'), q('exclude', '', true, 'A product id to leave out, e.g. the one on screen')],
+      tests: [status(200), "pm.test('viewed product listed', () => pm.expect(pm.response.json().items[0].product.id).to.eql(pm.environment.get('productId')));"],
+    }),
     req('Remove item', 'DELETE', '/carts/{{cartId}}/items/{{variantId}}', { pre: NEEDS_PRODUCT, tests: [status(200), ...noLine] }),
     req('Set item (for merge)', 'PUT', '/carts/{{cartId}}/items', { pre: NEEDS_PRODUCT,
       body: { productId: '{{productId}}', variantId: '{{variantId}}', qty: 1 },
@@ -361,6 +421,10 @@ const carts = folder('Carts', [
         ...cartShape,
         "if (pm.environment.get('productId')) pm.test('merged line present', () => pm.expect(c.lines.some((l) => l.variantId === pm.environment.get('variantId'))).to.be.true);",
       ],
+    }),
+    req('List my views (moved at merge)', 'GET', '/carts/me/views', { pre: NEEDS_PRODUCT,
+      description: "The anonymous cart's views move to the account when it merges.",
+      tests: [status(200), "pm.test('viewed product carried over', () => pm.expect(pm.response.json().items.some((i) => i.product.id === pm.environment.get('productId'))).to.be.true);"],
     }),
     req('Get anonymous cart after merge', 'GET', '/carts/{{cartId}}', {
       auth: NOAUTH,
@@ -394,8 +458,157 @@ const carts = folder('Carts', [
   ]),
 ]);
 
+// ── Checkout ──
+// Uses the product from Catalog (or Carts' fallback). Payments use Stripe test cards, confirmed with the
+// publishable key exactly as the website's Payment Element does it.
+const pickMethod = [
+  "const opts = (q.groups[0] || {}).methodOptions || [];",
+  "pm.environment.set('checkoutMethod', opts.includes('PICKUP') ? 'PICKUP' : opts[0] || 'PICKUP');",
+];
+const checkoutBody = (cartId) => ({
+  ...(cartId ? { cartId } : {}),
+  contact: { email: '{{email}}', fullName: 'Postman Tester', phone: '713-555-0100' },
+  address: { line1: '10000 Jones Rd', city: 'Houston', state: 'TX', zip: '77070' },
+  groups: [{ fulfillmentClass: 'STOCKED', method: '{{checkoutMethod}}', pickupLocation: 'HOUSTON' }],
+});
+const payable = [
+  "pm.test('payable', () => pm.expect(q.payable, JSON.stringify(q.issues)).to.be.true);",
+  "pm.test('total = subtotal + fees + tax', () => { const t = q.totals; pm.expect(t.totalCents).to.eql(t.subtotalCents - t.discountCents + t.deliveryCents + t.shippingCents + t.taxCents); });",
+];
+const NEEDS_PAYMENT = "if (!pm.variables.get('paymentIntentId')) pm.execution.skipRequest();";
+const stripeConfirm = (name, card, tests) => ({
+  name,
+  event: [
+    { listen: 'prerequest', script: { type: 'text/javascript', exec: [NEEDS_PAYMENT, "if (!pm.variables.get('stripePublishableKey')) pm.execution.skipRequest();"] } },
+    { listen: 'test', script: { type: 'text/javascript', exec: tests } },
+  ],
+  request: {
+    method: 'POST',
+    auth: { type: 'basic', basic: [{ key: 'username', value: '{{stripePublishableKey}}', type: 'string' }, { key: 'password', value: '', type: 'string' }] },
+    header: [],
+    body: { mode: 'urlencoded', urlencoded: [
+      { key: 'client_secret', value: '{{clientSecret}}' },
+      { key: 'payment_method', value: card },
+      { key: 'return_url', value: 'http://localhost:3000/checkout/confirmation' },
+    ] },
+    url: { raw: 'https://api.stripe.com/v1/payment_intents/{{paymentIntentId}}/confirm', protocol: 'https', host: ['api', 'stripe', 'com'], path: ['v1', 'payment_intents', '{{paymentIntentId}}', 'confirm'] },
+    description: `Stripe test card ${card}. Sandbox only.`,
+  },
+});
+
+const checkout = folder('Checkout', [
+  req('Health', 'GET', '/checkout/health', { auth: NOAUTH, tests: [status(200)] }),
+  folder('Guest checkout', [
+    req('Create cart', 'POST', '/carts/new', {
+      tests: [status(201), set('checkoutCartId', 'pm.response.json().cartId'), "pm.environment.unset('paymentIntentId');", "pm.environment.unset('statusTries');"],
+    }),
+    req('Add item', 'PUT', '/carts/{{checkoutCartId}}/items', { pre: NEEDS_PRODUCT,
+      body: { productId: '{{productId}}', variantId: '{{variantId}}', qty: 1 },
+      tests: [status(200)],
+    }),
+    req('Quote (nothing chosen yet)', 'POST', '/checkout/quote', { pre: NEEDS_PRODUCT,
+      body: { cartId: '{{checkoutCartId}}' },
+      description: 'Call on every checkout change. Problems come back as issues with HTTP 200.',
+      tests: [
+        status(200), 'const q = pm.response.json();',
+        "pm.test('not payable yet', () => pm.expect(q.payable).to.be.false);",
+        "pm.test('asks for a method and contact', () => pm.expect(q.issues.map((i) => i.code)).to.include.members(['METHOD_REQUIRED', 'CONTACT_REQUIRED']));",
+        "pm.test('offers methods', () => pm.expect(q.groups[0].methodOptions).to.be.an('array').that.is.not.empty);",
+        ...pickMethod,
+      ],
+    }),
+    req('Quote (invalid details)', 'POST', '/checkout/quote', {
+      body: { cartId: '{{checkoutCartId}}', address: { line1: '', state: 'ZZ', zip: '1' }, groups: [{ fulfillmentClass: 'STOCKED', method: 'BOAT' }] },
+      tests: [status(400), "pm.test('field errors', () => pm.expect(pm.response.json().details).to.have.property('address.zip'));"],
+    }),
+    req('Quote (local delivery, outside area)', 'POST', '/checkout/quote', { pre: NEEDS_PRODUCT,
+      body: { cartId: '{{checkoutCartId}}', address: { line1: '1 Main St', city: 'Dallas', state: 'TX', zip: '75201' }, groups: [{ fulfillmentClass: 'STOCKED', method: 'LOCAL_DELIVERY' }] },
+      tests: [status(200), 'const q = pm.response.json();', "pm.test('not payable', () => pm.expect(q.payable).to.be.false);"],
+    }),
+    req('Quote', 'POST', '/checkout/quote', { pre: NEEDS_PRODUCT,
+      body: checkoutBody('{{checkoutCartId}}'),
+      tests: [status(200), 'const q = pm.response.json();', ...payable, set('quoteId', 'q.quoteId'), set('quoteTotal', 'q.totals.totalCents')],
+    }),
+    req('Pay (no cartId)', 'POST', '/checkout/pay', { body: { quoteId: '{{quoteId}}' }, tests: [status(400)] }),
+    req('Pay (someone else’s cart)', 'POST', '/checkout/pay', {
+      body: { cartId: '00000000-0000-4000-8000-000000000000', quoteId: '{{quoteId}}' }, tests: [status(404)],
+    }),
+    req('Pay', 'POST', '/checkout/pay', { pre: NEEDS_PRODUCT,
+      body: { cartId: '{{checkoutCartId}}', quoteId: '{{quoteId}}' },
+      description: 'Holds the stock and returns the PaymentIntent client secret for stripe.confirmPayment().',
+      tests: [
+        status(200), 'const d = pm.response.json();',
+        "pm.test('client secret', () => pm.expect(d.clientSecret).to.match(/^pi_.+_secret_/));",
+        "pm.test('amount = quote total', () => pm.expect(d.amountCents).to.eql(Number(pm.environment.get('quoteTotal'))));",
+        set('paymentIntentId', 'd.paymentIntentId'), set('clientSecret', 'd.clientSecret'),
+      ],
+    }),
+    req('Pay again (same payment)', 'POST', '/checkout/pay', { pre: NEEDS_PAYMENT,
+      body: { cartId: '{{checkoutCartId}}', quoteId: '{{quoteId}}' },
+      tests: [status(200), "pm.test('same PaymentIntent', () => pm.expect(pm.response.json().paymentIntentId).to.eql(pm.environment.get('paymentIntentId')));"],
+    }),
+    stripeConfirm('Stripe: declined card', 'pm_card_chargeDeclined', [
+      "pm.test('declined', () => pm.expect(pm.response.json().error.code).to.eql('card_declined'));",
+    ]),
+    stripeConfirm('Stripe: pay with test Visa', 'pm_card_visa', [
+      "pm.test('succeeded', () => pm.expect(pm.response.json().status).to.eql('succeeded'));",
+    ]),
+    req('Payment status (wait for order)', 'GET', '/checkout/status', {
+      query: [q('paymentIntent', '{{paymentIntentId}}'), q('clientSecret', '{{clientSecret}}')],
+      pre: [NEEDS_PAYMENT, "if (Number(pm.environment.get('statusTries') || 0) > 0) setTimeout(() => {}, 1500);"],
+      description: 'The confirmation page polls this until the webhook has created the order.',
+      tests: [
+        status(200), 'const d = pm.response.json();',
+        "const tries = Number(pm.environment.get('statusTries') || 0);",
+        "if (d.status === 'PROCESSING' && tries < 12) { pm.environment.set('statusTries', tries + 1); pm.execution.setNextRequest(pm.info.requestName); } else {",
+        "  pm.test('paid', () => pm.expect(d.status).to.eql('PAID'));",
+        "  pm.test('order number', () => pm.expect(d.order.orderNumber).to.match(/^GLF-\\d{4}-\\d{6}$/));",
+        "  pm.test('order total = amount paid', () => pm.expect(d.order.totals.totalCents).to.eql(Number(pm.environment.get('quoteTotal'))));",
+        "  pm.environment.unset('statusTries');",
+        "}",
+      ],
+    }),
+    req('Payment status (wrong secret)', 'GET', '/checkout/status', { pre: NEEDS_PAYMENT,
+      query: [q('paymentIntent', '{{paymentIntentId}}'), q('clientSecret', '{{paymentIntentId}}_secret_wrong')],
+      tests: [status(404)],
+    }),
+    req('Pay after paid', 'POST', '/checkout/pay', { pre: NEEDS_PAYMENT,
+      body: { cartId: '{{checkoutCartId}}', quoteId: '{{quoteId}}' },
+      description: 'The paid cart is closed, so the guest cart is no longer found.',
+      tests: ["pm.test('refused', () => pm.expect(pm.response.code).to.be.oneOf([404, 409]));"],
+    }),
+  ], { auth: NOAUTH }),
+  folder('Signed-in checkout', [
+    req('Add item to my cart', 'PUT', '/carts/me/cart/items', { pre: NEEDS_PRODUCT,
+      body: { productId: '{{productId}}', variantId: '{{variantId}}', qty: 1 }, tests: [status(200)],
+    }),
+    req('Quote', 'POST', '/checkout/me/quote', { pre: NEEDS_PRODUCT,
+      body: { address: checkoutBody().address, groups: checkoutBody().groups },
+      description: 'Contact comes from the account (email is always the verified account email).',
+      tests: [status(200), 'const q = pm.response.json();', ...payable,
+        "pm.test('account email used', () => pm.expect(q.contact.email).to.eql(String(pm.environment.get('email')).toLowerCase()));",
+        set('meQuoteId', 'q.quoteId')],
+    }),
+    req('Pay', 'POST', '/checkout/me/pay', { pre: NEEDS_PRODUCT,
+      body: { quoteId: '{{meQuoteId}}' },
+      description: 'Left unpaid on purpose: the sweep releases the held stock after 30 minutes.',
+      tests: [status(200), "pm.test('client secret', () => pm.expect(pm.response.json().clientSecret).to.match(/^pi_.+_secret_/));"],
+    }),
+    req('Pay (guest quote with a token)', 'POST', '/checkout/me/pay', { pre: NEEDS_PRODUCT,
+      body: { quoteId: '{{quoteId}}' }, tests: [status(404)],
+    }),
+    req('Quote (no token)', 'POST', '/checkout/me/quote', { auth: NOAUTH, body: {}, tests: [status(401)] }),
+  ]),
+]);
+
 // ── Teardown ──
 const teardown = folder('Teardown', [
+  // Checkout changes the product's stock, which bumps its version: read the current one first.
+  req('Get test product (current version)', 'GET', '/catalog/admin/products/{{productId}}', {
+    auth: ADMIN,
+    pre: NEEDS_TEST_PRODUCT,
+    tests: [status(200), 'const p = pm.response.json();', set('productVersion', 'p.version')],
+  }),
   req('Archive test product', 'PUT', '/catalog/admin/products/{{productId}}', {
     auth: ADMIN,
     pre: NEEDS_TEST_PRODUCT,
@@ -424,7 +637,7 @@ const collection = {
   info: {
     name: 'GreenLove Farms',
     description: [
-      'Auth, catalog and carts stacks.',
+      'Auth, catalog, carts and checkout stacks.',
       '',
       'Run Auth → Login first; it stores idToken, which signed-in requests send as a Bearer token. Catalog → Admin uses adminIdToken from Auth → Admin login.',
       '',
@@ -439,7 +652,7 @@ const collection = {
     { listen: 'prerequest', script: { type: 'text/javascript', exec: prodGuard } },
     { listen: 'test', script: { type: 'text/javascript', exec: commonTests } },
   ],
-  item: [auth, catalog, carts, teardown],
+  item: [auth, catalog, carts, checkout, teardown],
 };
 
 const env = (name, host) => ({
@@ -450,10 +663,11 @@ const env = (name, host) => ({
     { key: 'password', value: '', type: 'secret', enabled: true },
     { key: 'adminEmail', value: '', type: 'default', enabled: true },
     { key: 'adminPassword', value: '', type: 'secret', enabled: true },
-    ...['idToken', 'accessToken', 'refreshToken', 'expiresIn', 'adminIdToken', 'cartId', 'productId', 'productSlug', 'variantId', 'productVersion'].map((key) => ({
+    { key: 'stripePublishableKey', value: '', type: 'default', enabled: true, description: 'pk_test_… for the sandbox; lets the Checkout folder pay with Stripe test cards' },
+    ...['idToken', 'accessToken', 'refreshToken', 'expiresIn', 'adminIdToken', 'cartId', 'productId', 'productSlug', 'variantId', 'productVersion', 'checkoutCartId', 'checkoutMethod', 'quoteId', 'quoteTotal', 'meQuoteId', 'paymentIntentId', 'clientSecret'].map((key) => ({
       key,
       value: '',
-      type: key.endsWith('Token') ? 'secret' : 'default',
+      type: key.endsWith('Token') || key === 'clientSecret' ? 'secret' : 'default',
       enabled: true,
     })),
   ],
