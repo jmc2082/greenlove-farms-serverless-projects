@@ -108,7 +108,9 @@ export interface Order {
   inventory: { committedAt: Date | null; short: boolean };
   refunds?: OrderRefund[];
   guestAccessTokenHash: string | null; // sha256 of the tracking-link token, set when the link is emailed
-  notifications: { confirmationSentAt: Date | null };
+  // Emails sent for this order. `sent` keys: 'confirmation', 'status:<groupId>:<status>', 'refund:<refundId>'.
+  // A key is claimed (sentAt null) before sending so a repeated event can't send twice.
+  notifications: { confirmationSentAt: Date | null; sent?: { key: string; claimedAt: Date; sentAt: Date | null; messageId?: string }[] };
   createdAt: Date;
   updatedAt: Date;
 }

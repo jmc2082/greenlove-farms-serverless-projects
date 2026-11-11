@@ -2,7 +2,7 @@ import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from
 import { ObjectId } from 'mongodb';
 import {
   getDb, getClaims, isAdmin, isStaff, ok, badRequest, forbidden, notFound, conflict, serverError,
-  FULFILLMENT_GROUP_STATUSES, FulfillmentGroupStatus,
+  FULFILLMENT_GROUP_STATUSES, FulfillmentGroupStatus, publishEvent,
 } from '@greenlove/shared';
 import { orders, refFilter } from '../../lib/orders';
 import { checkTransition, orderStatusFor } from '../../lib/status';
@@ -65,6 +65,8 @@ export const handler = async (event: APIGatewayProxyEventV2WithJWTAuthorizer): P
       { returnDocument: 'after' }
     );
     if (!updated) return conflict('This order was just updated by someone else. Reload and try again.');
+    // The notifications stack decides which statuses the shopper is emailed about.
+    await publishEvent({ source: 'greenlove.orders', type: 'FulfillmentStatusChanged', detail: { orderId: updated._id.toHexString(), groupId, status: to } });
     return ok(toAdminOrder(updated));
   } catch (err) {
     console.error('admin-group-status error', err);

@@ -1,0 +1,17 @@
+{
+  "name": "greenlove-notifications",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "sam build",
+    "deploy": "sam deploy"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "mongodb": "^6.10.0",
+    "typescript": "^5.6.0"
+  }
+}

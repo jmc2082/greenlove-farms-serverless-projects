@@ -4,6 +4,7 @@
   "private": true,
   "description": "GreenLove shared Lambda layer — runtime dependencies + @greenlove/shared build",
   "dependencies": {
+    "@aws-sdk/client-eventbridge": "3.1158.0",
     "@aws-sdk/client-sesv2": "3.1158.0",
     "@aws-sdk/client-ssm": "^3.700.0",
     "mongodb": "^6.10.0"

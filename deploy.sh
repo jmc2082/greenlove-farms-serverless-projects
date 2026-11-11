@@ -14,9 +14,9 @@ if [[ "$ENV" != "dev" && "$ENV" != "prod" ]]; then
 fi
 shift
 
-ORDER=(domain-infra shared-infra auth catalog carts checkout promotions orders)
+ORDER=(domain-infra shared-infra auth catalog carts checkout promotions orders notifications)
 REQUESTED=("$@")
-[[ ${#REQUESTED[@]} -eq 0 ]] && REQUESTED=(shared-infra auth catalog carts checkout promotions orders)
+[[ ${#REQUESTED[@]} -eq 0 ]] && REQUESTED=(shared-infra auth catalog carts checkout promotions orders notifications)
 
 for name in "${REQUESTED[@]}"; do
   [[ " ${ORDER[*]} " == *" $name "* ]] || { echo "unknown stack: $name" >&2; exit 1; }

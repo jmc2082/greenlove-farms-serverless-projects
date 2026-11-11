@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: GreenLove Farms — Notifications Stack (order confirmation, status and refund emails)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  MongoDbName:
+    Type: String
+    Default: greenlove_dev
+  SharedLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/shared-layer-arn
+  ApiDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/api-domain-name
+  UserPoolId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/user-pool-id
+  UserPoolClientId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/cognito/client-id
+  AllowedOrigins:
+    Type: CommaDelimitedList
+    Default: http://localhost:3000
+  FromTransactional:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/from-transactional
+  ReplyTo:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/reply-to
+  TransactionalConfigSet:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /greenlove/dev/ses/transactional-config-set
+  EmailDomain:
+    Type: String
+    Default: greenlove-farms.com
+    Description: SES domain identity (created by domain-infra) that order emails are sent from
+  WebUrl:
+    Type: String
+    Default: http://localhost:3000
+    Description: The website, for links in emails (e.g. <WebUrl>/orders/track?token=...)
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    MemorySize: 256
+    Timeout: 15
+    Architectures:
+      - arm64
+    Layers:
+      - !Ref SharedLayerArn
+    Environment:
+      Variables:
+        MONGODB_URI_PARAM: !Sub "/greenlove/${Environment}/mongodb-uri"
+        MONGODB_DB_NAME: !Ref MongoDbName
+        ENVIRONMENT: !Ref Environment
+        SERVICE_VERSION: "0.1.0"
+        WEB_URL: !Ref WebUrl
+        SES_FROM: !Ref FromTransactional
+        SES_REPLY_TO: !Ref ReplyTo
+        SES_CONFIG_SET: !Ref TransactionalConfigSet
+
+Resources:
+
+  # ── Shopper emails, driven by events from checkout and orders ─────────────────
+  OrderEmailsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-order-emails"
+      CodeUri: src/
+      Handler: handlers/on-event.handler
+      Description: Order confirmation, status and refund emails
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${TransactionalConfigSet}"
+      Events:
+        OrderEvents:
+          Type: EventBridgeRule
+          Properties:
+            # dev and prod share the default bus: match this environment only.
+            Pattern:
+              source: [greenlove.checkout, greenlove.orders]
+              detail-type: [OrderPaid, FulfillmentStatusChanged, RefundIssued]
+              detail:
+                environment: [!Ref Environment]
+            RetryPolicy:
+              MaximumEventAgeInSeconds: 21600
+              MaximumRetryAttempts: 20
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/on-event.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]
+
+  # ── Safety net: confirmations whose event was lost or whose email failed ──────
+  ConfirmationSweepFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-confirmation-sweep"
+      CodeUri: src/
+      Handler: handlers/sweep.handler
+      Description: Send order confirmations that haven't gone out
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "greenlove/${Environment}/mongodb-uri"
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${TransactionalConfigSet}"
+      Events:
+        Every15Minutes:
+          Type: ScheduleV2
+          Properties:
+            # Schedule names are account-wide: name it per stack so dev and prod don't collide.
+            Name: !Sub "${AWS::StackName}-confirmation-sweep"
+            ScheduleExpression: rate(15 minutes)
+            Description: Send missed order confirmations
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [handlers/sweep.ts]
+        External: ["@greenlove/shared", mongodb, "@aws-sdk/*"]

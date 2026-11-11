@@ -1,7 +1,7 @@
 import { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { ObjectId } from 'mongodb';
 import {
-  getDb, getClaims, isStaff, ok, badRequest, forbidden, notFound, conflict, serverError, OrderRefund, Product,
+  getDb, getClaims, isStaff, ok, badRequest, forbidden, notFound, conflict, serverError, OrderRefund, Product, publishEvent,
 } from '@greenlove/shared';
 import { orders, refFilter } from '../../lib/orders';
 import { orderStatusFor } from '../../lib/status';
@@ -131,6 +131,7 @@ export const handler = async (event: APIGatewayProxyEventV2WithJWTAuthorizer): P
       console.error('refund recorded in Stripe but the order changed meanwhile', { order: order.orderNumber, refund: refund.id });
       return conflict('The refund went through, but the order was updated at the same time. Reload to see it.');
     }
+    await publishEvent({ source: 'greenlove.orders', type: 'RefundIssued', detail: { orderId: updated._id.toHexString(), refundId: refund.id } });
     return ok(toAdminOrder(updated));
   } catch (err) {
     const stripeMessage = (err as { type?: string; message?: string }).type?.startsWith('Stripe') ? (err as Error).message : null;

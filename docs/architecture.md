@@ -72,6 +72,7 @@ greenlove-farms-serverless-projects/
   checkout/         quote engine, stock holds, Stripe PaymentIntents and Tax, order creation (Stripe webhook)
   promotions/       promo codes: staff create/edit/pause, redemption history, the cart's quick code check
   orders/           order history, guest tracking links and lookup email, staff list, status changes, refunds
+  notifications/    shopper emails from order events (no API): confirmation, status updates, refunds; confirmation sweep
   notifications/    SES templates, transactional sends, abandoned-cart sweep
 ```
 
@@ -167,7 +168,8 @@ Created only by the `payment_intent.succeeded` webhook, so every order is paid. 
     pickupLocation?, address?, deliveryDate?, shipsWithinDays?, feeCents, taxCents,
     trackingNumber?, trackingUrl?, statusHistory: [{ status, at, by? }]
   }],
-  quoteId, cartId, inventory: { committedAt, short }, guestAccessTokenHash, notifications: { confirmationSentAt },
+  quoteId, cartId, inventory: { committedAt, short }, guestAccessTokenHash,
+  notifications: { confirmationSentAt, sent: [{ key, claimedAt, sentAt, messageId }] }, refunds?,
   createdAt, updatedAt }
 ```
 Guests get a `customers` record keyed by email (`cognitoSub: null`), so signing up later with that email links the orders.
@@ -185,6 +187,15 @@ Guests get a `customers` record keyed by email (`cognitoSub: null`), so signing 
   double-click can't refund twice. Refunds made in the Stripe Dashboard aren't picked up yet.
 - *Guest links:* a random 32-byte token, stored only as its sha256 in `guestAccessTokenHash`; a new link replaces
   the old one. `POST /orders/lookup` answers 202 either way and only emails the link to the order's address.
+- *Emails to shoppers* (`notifications` stack): checkout publishes `OrderPaid` and orders publishes
+  `FulfillmentStatusChanged` / `RefundIssued` (`publishEvent`, default EventBridge bus, `detail.environment` set;
+  publishing never fails the caller). The `order-emails` function sends the confirmation (guests: a new tracking
+  link; account holders: `/account/orders/{orderNumber}`), emails for `SHIPPED`, `READY` (pickup), `OUT_FOR_DELIVERY`
+  and `CANCELLED`, and a refund notice. Later guest emails don't mint a new link (that would break the one in the
+  confirmation). Each email claims a key in `notifications.sent` (`confirmation`, `status:<groupId>:<status>`,
+  `refund:<refundId>`) before sending, so a repeated event can't send twice; a failure releases the claim and the event
+  is retried (EventBridge, up to 6 hours). `confirmation-sweep` (every 15 minutes) sends confirmations still missing
+  after 5 minutes, for orders up to 3 days old. Reserved test domains (example.com, .test, …) are never emailed.
 - *Email:* `sendEmail` and `emailLayout` in the shared layer send through SES with the transactional configuration
   set; links use the stack's `WebUrl` (`http://localhost:3000` on dev, `https://www.greenlove-farms.com` on prod).
 

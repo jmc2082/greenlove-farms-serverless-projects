@@ -226,6 +226,10 @@ Resources:
             ParameterName: !Sub "greenlove/${Environment}/stripe-secret-key"
         - SSMParameterReadPolicy:
             ParameterName: !Sub "greenlove/${Environment}/stripe-webhook-secret"
+        - Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
       Events:
         Public0:
           Type: HttpApi

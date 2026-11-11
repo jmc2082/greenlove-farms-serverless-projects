@@ -1,6 +1,5 @@
-import { createHash, randomBytes } from 'node:crypto';
 import { Db, Filter, ObjectId } from 'mongodb';
-import { Order, emailButton, emailLayout, escapeHtml, sendEmail } from '@greenlove/shared';
+import { Order, emailButton, emailLayout, escapeHtml, hashToken, newTrackingToken, sendEmail, trackingUrl } from '@greenlove/shared';
 import { statusSummary } from './status';
 
 export const orders = (db: Db) => db.collection<Order>('orders');
@@ -33,12 +32,12 @@ export function toOrderSummary(o: Order) {
 // ── Guest tracking links ──────────────────────────────────────────────────────
 // The link holds a random token; only its sha256 is stored. A new link replaces the previous one.
 
-export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+export { hashToken };
 
 export async function issueTrackingLink(db: Db, order: Order): Promise<string> {
-  const token = randomBytes(32).toString('base64url');
+  const token = newTrackingToken();
   await orders(db).updateOne({ _id: order._id }, { $set: { guestAccessTokenHash: hashToken(token), updatedAt: new Date() } });
-  return `${process.env.WEB_URL}/orders/track?token=${token}`;
+  return trackingUrl(token);
 }
 
 export async function emailTrackingLink(order: Order, link: string): Promise<void> {

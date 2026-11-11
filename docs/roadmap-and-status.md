@@ -28,7 +28,7 @@ Status key: ✅ done · 🟡 in progress · ⬜ not started
 | `checkout` | ✅ (2026-11-10) | ✅ (2026-11-11; no live Stripe keys yet) | `.../checkout` |
 | `promotions` | ✅ (2026-11-10) | ✅ (2026-11-11) | `.../promotions` |
 | `orders` | ✅ (2026-11-10) | ✅ (2026-11-11) | `.../orders` |
-| `notifications` | ⬜ | ⬜ | |
+| `notifications` | ✅ (2026-11-11) | ⬜ | (no API: runs on events) |
 
 Prod health checks (`/auth`, `/catalog`, `/carts`, `/checkout`, `/promotions`, `/orders` + `/health`) all return 200. The read-only Postman run on prod has no server errors; its signed-in checks fail with 401 because the test accounts exist only on dev.
 
@@ -66,6 +66,7 @@ Each environment's user can open only its own database, so a dev test can never 
 | 2026-11-09 | Deployed `catalog` and `carts` to prod. Added `scripts/with-db.sh`. `deploy.sh` now accepts `AWS_PROFILE`. |
 | 2026-11-10 | On dev: recently viewed (guest views carry over at login) and saved addresses with ids and a default. Addresses saved earlier get ids the first time they're read. |
 | 2026-11-10 | Catalog on dev: search (Atlas Search, with typo tolerance and synonyms), suggestions, sorting (featured, newest, price), price / delivery-method / in-stock filters, and availability on every product. The shared database connection no longer uses MongoDB's strict API mode, which blocks Atlas Search. Made the first prod admin. |
+| 2026-11-11 | New `notifications` stack on dev: order confirmation (guests get their private tracking link, account holders a link to the order in their account), status emails (shipped with tracking, ready for pickup, out for delivery, cancelled) and refund notices. Checkout and orders publish `OrderPaid`, `FulfillmentStatusChanged` and `RefundIssued` on the default EventBridge bus (filtered by environment); each email is sent once per order and key; a 15-minute sweep sends any confirmation that didn't go out; reserved test domains (example.com etc.) are never emailed. Existing dev orders were marked as already confirmed. Postman: 515 checks, all passing. |
 | 2026-11-11 | Deployed everything to prod: `shared-infra`, `auth`, `catalog`, `carts` updated; `checkout`, `promotions`, `orders` created; all indexes and the Atlas Search index built. Fixed the checkout stock-sweep schedule name, which clashed with dev's (schedule names are account-wide). |
 | 2026-11-10 | New `orders` stack on dev: order history and order detail for signed-in shoppers (`/orders/me`, including orders they placed as a guest with the same email), guest tracking links (`/orders/track?token=`) and email lookup (`POST /orders/lookup` emails a fresh link; the first email sent by the app), staff order list (by delivery day, method, status, search, stock shortfalls), status updates per fulfillment group with history, and refunds (Stripe refund, Stripe Tax reversal, optional restock). Shared layer: `sendEmail` and a branded email layout. SES production access confirmed. Paths are `/orders/me...` rather than the spec's `/me/orders...`. Postman: 509 checks, all passing. |
 | 2026-11-10 | New `promotions` stack on dev: staff create, edit, pause/resume and archive codes, list them by state (active, scheduled, expired, paused, archived), see redemptions; public `POST /promotions/check` for the cart. Checkout quote takes `promoCode`: percent, fixed, free delivery and free shipping codes, limited by dates, minimum, items, total uses, uses per customer and first order only, applied before tax. The webhook records each use. Paths are `/promotions/admin...` rather than the spec's `/admin/promotions...` because each stack has its own base path. Postman: 442 checks, all passing. |
@@ -116,7 +117,7 @@ Backend items, roughly in order. The full list with details is in the frontend's
 | **Promo codes:** collections, admin create/edit/pause, redemptions, `POST /promotions/check`, applied in the quote | promotions (new), checkout | ✅ dev and prod |
 | **Orders:** `/orders/me`, guest tracking link and lookup, staff list, status changes, refunds | orders (new) | ✅ dev and prod |
 | Refunds made in the Stripe Dashboard (`charge.refunded` webhook) | orders | ⬜ until then, refund from the admin endpoint so tax and stock stay right |
-| **Emails:** order confirmation, status updates, guest tracking link | notifications (new) | ⬜ |
+| **Emails:** order confirmation (with the guest tracking link), status updates (shipped, ready for pickup, out for delivery, cancelled), refund notices | notifications (new) | 🟡 on dev, not prod yet |
 | Classify every product's `regulatoryClass` | data | ⬜ |
 
 ### Phase 2: farm products
@@ -135,7 +136,7 @@ Wholesale and restaurant standing orders, corporate juice delivery, farm-stand P
 
 ## Still to do outside the code
 
-- [x] Run the full Postman tests on dev: 509 checks, all passing (2026-11-10). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
+- [x] Run the full Postman tests on dev: 515 checks, all passing (2026-11-11). Accounts: a dev customer and a dev admin (Gmail `+` aliases, the admin in the dev Admins group) in `.env` as `POSTMAN_TEST_*` and `POSTMAN_ADMIN_*`. Prod runs are read-only and have no test accounts yet.
 - [x] Deploy the dev work to prod (2026-11-11): all stacks and indexes.
 - [ ] Create the categories (at least `body-care`) with `PUT /catalog/admin/categories/{slug}`.
 - [ ] Add `/greenlove/prod/cloudinary-url` (needed before uploading product images on prod).

@@ -12,3 +12,4 @@ export * from './views/order';
 export * from './delivery';
 export * from './promotions';
 export * from './email';
+export * from './events';

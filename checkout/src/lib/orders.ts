@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import { Db, ObjectId } from 'mongodb';
-import { Customer, FulfillmentGroup, Order, Promotion, PromotionRedemption, farmYear } from '@greenlove/shared';
+import { Customer, FulfillmentGroup, Order, Promotion, PromotionRedemption, farmYear, publishEvent } from '@greenlove/shared';
 import { CheckoutQuote, quotes } from './quote';
 import { commitStock } from './holds';
 
@@ -139,6 +139,10 @@ export async function createOrderForPayment(db: Db, stripe: Stripe, pi: Stripe.P
     await orders(db).updateOne({ _id: order._id }, { $addToSet: { 'tax.transactionIds': tx.id }, $set: { updatedAt: new Date() } });
   }
 
+  // The notifications stack sends the confirmation email (and a sweep catches it if this event is lost).
+  if (!order.notifications.confirmationSentAt) {
+    await publishEvent({ source: 'greenlove.checkout', type: 'OrderPaid', detail: { orderId: order._id.toHexString() } });
+  }
   return order;
 }
 
